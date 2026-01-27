@@ -18,13 +18,21 @@ end
 
 App(model::Union{ReactiveModel, Nothing}, window::Union{Window, Nothing}, priority::Symbol = :model) = App(model, window, Ref(:model))
 
+"""
+    unproxy(msg::String)
+
+Workaround for a JS Error in Electron when parsing proxy objects.
+"""
+function unproxy(msg::String)
+    "(x => (window.Vue) && Vue.isProxy(x) ? JSON.parse(JSON.stringify(x)) : x)($msg)"
+end
+
 function Base.getproperty(app::App, fieldname::Symbol)
     fieldname ∈ [:__model__, :__window__, :__priority__] && return getfield(app, fieldname)
 
     if app.__priority__[] == :window && app.__window__ !== nothing
-        run(app.__window__, "GENIEMODEL['$fieldname']")
+        run(app.__window__, unproxy("GENIEMODEL['$fieldname']"))
     elseif app.__model__ !== nothing
-        @info 1
         model = getfield(app, :__model__)
         if !hasproperty(model, fieldname)
             field_str = String(fieldname)
@@ -39,7 +47,7 @@ function Base.getproperty(app::App, fieldname::Symbol)
             field isa Reactive ? field[] : field
         end
     elseif app.__window__ !== nothing
-        run(app.__window__, "GENIEMODEL['$fieldname']")
+        run(app.__window__, unproxy("GENIEMODEL['$fieldname']"))
     else
         @warn("App has neither model nor window")
     end
@@ -48,7 +56,7 @@ end
 function Base.setproperty!(app::App, fieldname::Symbol, value)
     if app.__priority__[] == :window && app.__window__ !== nothing
         js_value = json(render(value))
-        run(app.__window__, "GENIEMODEL['$fieldname'] = $js_value")
+        run(app.__window__, unproxy("GENIEMODEL['$fieldname'] = $js_value"))
     elseif app.__model__ !== nothing
         field = getfield(app.__model__, fieldname)
         if field isa Reactive
@@ -58,7 +66,7 @@ function Base.setproperty!(app::App, fieldname::Symbol, value)
         end
     elseif app.__window__ !== nothing
         js_value = json(render(value))
-        run(app.__window__, "GENIEMODEL['$fieldname'] = $js_value")
+        run(app.__window__, unproxy("GENIEMODEL['$fieldname'] = $js_value"))
     else
         @warn("App has neither model nor window")
     end
@@ -173,7 +181,7 @@ App(context::Module) = App(@eval context Stipple.@type)
 function Base.run(app::App, msg::Union{String, JSONText})
     msg isa JSONText && (msg = json(msg))
     if app.__window__ !== nothing
-        run(app.__window__, msg)
+        run(app.__window__, unproxy(msg))
     elseif app.__model__ !== nothing
         run(app.__model__, msg)
     end
