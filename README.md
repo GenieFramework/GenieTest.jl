@@ -6,12 +6,12 @@ A Julia package for testing Stipple/Genie applications with integrated frontend 
 
 GenieTest provides utilities for creating and testing Stipple-based web applications with both backend (Genie/Stipple reactive models) and frontend (browser or Electron) components. It simplifies the process of launching test applications and verifying their behavior.
 
-The base of the package is the type `App` that behaves very much like a `ReactiveModel` with some subtle differences.
-- Values are retrieved from the model, if available, or from an Electron window as a fallback. In that case only public fields are accessible and only fields declared with `@in` are sent to the backend.
-- The true fields of the App (`model` and `window` are available via `app[:model]` and `app[:window]`)
+For this purpose we introduce `GenieTest.App` that behaves very much like a `ReactiveModel` with some subtle differences.
+- An `App` consists of the two fields `__model__` and `__window__`, which optionally contain a ReactiveModel (backend) and an Electron window (frontend)
+- Values are retrieved from the model, if available, or from the Electron window as a fallback. In the latter case only public fields are accessible and only fields declared with `@in` are sent to the backend.
 - The model fields are available via dot syntax as usual.
-- The field values of the App are always values and not Reactive variables. Assignments are nevertheless reactive, e.g. `x = app.myfield` or `app.myfield = "newvalue"`. The reason is that the syntax should be identical independent whether we work with fronend or backend.
-- ilent updates are only possible if a model is available and can be written as `app.myfield![!] = "silent update"`. But in most cases you will better define `model = app[:model]`
+- CAVEAT: The dot syntax always returns values and not Reactive variables. The reason is that the syntax should be identical independent whether we work with fronend or backend. Assignments are nevertheless reactive, e.g. `x = app.myfield` or `app.myfield = "newvalue"` will trigger reactive updates.
+- Silent updates are only possible if a model is available and can be written as `app[:myfield] = "silent update`. But in most cases you will better define `model = app.__model__` and continue with standard syntax for `model`
 This syntax is still in development and can be changed in future versions.
 
 ## Features
@@ -73,10 +73,16 @@ App(url::String = "/";
     backend::Bool = true,
     backend_ready::Function = model -> model.isready[]
 )
+
+App(T::Type{ReactiveModel}; kwargs...)
+
+App(context::Module; kwargs)
 ```
 
 **Arguments:**
-- `url`: URL to open (default: "/"). Automatically prefixes with localhost if needed.
+- `url`: URL to open (default: `"/"`). Automatically prefixes with localhost if needed.
+- `T`: explicit ReactiveModel, e.g. `MyApp`
+- `context`: Module name in which an implicit model is defined, e.g. `Main` or `@__MODULE__`
 
 **Keyword Arguments:**
 - `timeout`: Seconds to wait for backend readiness (default: 10)
@@ -137,6 +143,7 @@ notify_test(model, result, "Value Check")
 ### Remarks
 
 - For local testing, the standard browser is probably the best choice. For remote testing Electron must be used, as the standard browser cannot be addressed via JavaScript from the test suite.
+- If you need to evaluate Javascript expressions in the frontend and send them to the backend, Electron is currently more convenient.
 - On MacOS Passkeys are, unfortunately, not supported via Electron. (If anyone has a good idea how to get around that limitation, feel welcome to open an issue.)
 
 ## License

@@ -1,22 +1,31 @@
 module GenieTest
 
 using Test
-export wait_for, notify_test
+export App, wait_for, notify_test
+
+using Reexport
+@reexport using Stipple
+@reexport using Stipple.ReactiveTools
 
 using Electron
-using Stipple, Stipple.ReactiveTools
 using UUIDs
-using HTTP
-using Dates
 
 struct App
-    model::Union{ReactiveModel, Nothing}
-    window::Union{Window, Nothing}
+    __model__::Union{ReactiveModel, Nothing}
+    __window__::Union{Window, Nothing}
+    __priority__::Base.RefValue{Symbol}
 end
 
+App(model::Union{ReactiveModel, Nothing}, window::Union{Window, Nothing}, priority::Symbol = :model) = App(model, window, Ref(:model))
+
 function Base.getproperty(app::App, fieldname::Symbol)
-    if app[:model] !== nothing
-        model = app[:model]
+    fieldname ∈ [:__model__, :__window__, :__priority__] && return getfield(app, fieldname)
+
+    if app.__priority__[] == :window && app.__window__ !== nothing
+        run(app.__window__, "GENIEMODEL['$fieldname']")
+    elseif app.__model__ !== nothing
+        @info 1
+        model = getfield(app, :__model__)
         if !hasproperty(model, fieldname)
             field_str = String(fieldname)
             new_fieldname = Symbol(field_str[1:end-1])
@@ -29,45 +38,49 @@ function Base.getproperty(app::App, fieldname::Symbol)
             field = getfield(model, fieldname)
             field isa Reactive ? field[] : field
         end
-    elseif app[:window] !== nothing
-        run(app[:window], "GENIEMODEL['$fieldname']")
+    elseif app.__window__ !== nothing
+        run(app.__window__, "GENIEMODEL['$fieldname']")
     else
         @warn("App has neither model nor window")
     end
 end
 
 function Base.setproperty!(app::App, fieldname::Symbol, value)
-    if app[:model] !== nothing
-        field = getfield(app[:model], fieldname)
+    if app.__priority__[] == :window && app.__window__ !== nothing
+        js_value = json(render(value))
+        run(app.__window__, "GENIEMODEL['$fieldname'] = $js_value")
+    elseif app.__model__ !== nothing
+        field = getfield(app.__model__, fieldname)
         if field isa Reactive
             field[] = value
         else
-            setfield!(app[:model], fieldname, value)
+            setfield!(app.__model__, fieldname, value)
         end
-    elseif app[:window] !== nothing
+    elseif app.__window__ !== nothing
         js_value = json(render(value))
-        run(app[:window], "GENIEMODEL['$fieldname'] = $js_value")
+        run(app.__window__, "GENIEMODEL['$fieldname'] = $js_value")
     else
         @warn("App has neither model nor window")
     end
 end
 
-Base.getindex(app::App, fieldname::Symbol) = getfield(app, fieldname)
+Base.getindex(app::App, fieldname::Symbol) = getproperty(app, fieldname::Symbol)
 
 function Base.setindex!(app::App, value, fieldname::Symbol)
-    app[:model] === nothing && return
-    field = getfield(app[:model], fieldname)
+    app.__model__ === nothing && return
+    field = getfield(app.__model__, fieldname)
     if field isa Reactive
         getfield(field, :o).val = value
     else
-        setfield!(app[:model], fieldname, value)
+        setfield!(app.__model__, fieldname, value)
     end
 end
 
-# will be moved to Stipple
-Base.getindex(model::ReactiveModel, field::Symbol) = getfield(model, field)
+# Will be moved to Stipple, therefore adding it here as a Union to prevent overwrite error.
+Base.getindex(model::Union{Nothing, ReactiveModel}, field::Symbol) = model === nothing ? nothing : getfield(model, field)
 
-Base.notify(app::App, field::Symbol) = app[:model] !== nothing && notify(getfield(app[:model], field))
+Base.notify(app::App, field::Symbol) = app.__model__ !== nothing && notify(getfield(app.__model__, field))
+Base.notify(app::App, msg::AbstractString, type::Union{Nothing, String, Symbol} = nothing; kwargs...) = app.__model__ !== nothing && notify(app.__model__, msg, type; kwargs...)
 
 """
     App(url::String = "/";
@@ -101,7 +114,7 @@ Create a Stipple App with optional frontend and backend.
 # Returns
 An `App` instance containing the backend model and the frontend window.
 """
-function App(url::String = "/";
+function App(url::String;
     timeout::Int = 10,
     port = nothing,
     id::String = string(uuid4()),
@@ -140,8 +153,8 @@ function App(url::String = "/";
         end
         println()
         
-        if !backend_ready(model)
-            close_app(win)
+        if model !== nothing && !backend_ready(model)
+            close(win)
             error("App could not be created")
         end
     end
@@ -150,18 +163,34 @@ function App(url::String = "/";
     return App(model, win)
 end
 
+function App(::Type{T}; kwargs...) where T <: ReactiveModel
+    model = Stipple.ReactiveTools.init_model(T; kwargs...)
+    return App(model, nothing)
+end
+
+App(context::Module) = App(@eval context Stipple.@type)
+
+function Base.run(app::App, msg::Union{String, JSONText})
+    msg isa JSONText && (msg = json(msg))
+    if app.__window__ !== nothing
+        run(app.__window__, msg)
+    elseif app.__model__ !== nothing
+        run(app.__model__, msg)
+    end
+end
+
 function Base.close(app::App)
-    app[:model] !== nothing && run(app[:model], "window.close()")
-    app[:window] !== nothing && close(app[:window].app)
+    app.__model__ !== nothing && run(app.__model__, "window.close()")
+    app.__window__ !== nothing && close(app.__window__.app)
 end
 
 function print_object(io, app::App, compact = false)
     println(io, "Instance of 'GenieTest.App'")
     compact && return
     
-    print(io, "    backend:  ", app[:model] === nothing ? "nothing" : "")
-    app[:model] === nothing ? println() : print(app[:model])
-    println(io, "    frontend: ", app[:window] === nothing ? "nothing" : "Electron.Window")
+    print(io, "    backend:  ", app.__model__ === nothing ? "nothing" : "")
+    app.__model__ === nothing ? println() : print(app.__model__)
+    println(io, "    frontend: ", app.__window__ === nothing ? "nothing" : "Electron.Window")
 end
 
 # default show used by Array show
@@ -192,7 +221,7 @@ function notify_test(model::ReactiveModel, test::Test.Result, test_str::Abstract
 end
 
 function notify_test(app::App, test::Test.Result, test_str::AbstractString = "Test")
-    notify_test(app[:model], test, test_str)
+    notify_test(app.__model__, test, test_str)
 end
 
 function init_model()
