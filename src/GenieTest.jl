@@ -224,8 +224,4 @@ function notify_test(app::App, test::Test.Result, test_str::AbstractString = "Te
     notify_test(app.__model__, test, test_str)
 end
 
-function init_model()
-    Stipple.@init(TableViewer, debounce = 50, core_theme = false)
-end
-
 end # GenieTest
