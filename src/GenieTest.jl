@@ -128,7 +128,8 @@ function App(url::String;
     id::String = string(uuid4()),
     frontend::Symbol = :browser,
     backend::Bool = true,
-    backend_ready::Function = model -> model.isready[]
+    backend_ready::Function = model -> model.isready[],
+    electron_options::Dict{String, <:Any} = Dict{String, Any}()
 )
     port === nothing && (port = Genie.config.server_port)
     println()
@@ -136,7 +137,12 @@ function App(url::String;
     startswith(url, r"https?://"i) || (url = "http://localhost:$port/" * strip(url, '/'))
     url = URI("$url?debug_id=$id")
     win = if frontend == :electron
-        Window(url, options = Dict("sandbox" => true))
+        # default to sandbox mode
+        electron_options = Dict{String, Any}(electron_options)
+        wp = get!(electron_options, "webPreferences", Dict{String, Any}())
+        electron_options["webPreferences"] = merge(Dict{String, Any}("sandbox" => true), wp)
+
+        Window(url, options = electron_options)
     elseif frontend == :browser
         Genie.Server.openbrowser(url)
         nothing
