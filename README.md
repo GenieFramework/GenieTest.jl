@@ -71,7 +71,7 @@ App(url::String = "/";
     id::String = string(uuid4()),
     frontend::Symbol = :browser,
     backend::Bool = true,
-    backend_ready::Function = model -> model.isready[]
+    isready::Function = app -> app.isready === true
 )
 
 App(T::Type{ReactiveModel}; kwargs...)
@@ -89,8 +89,8 @@ App(context::Module; kwargs)
 - `port`: Server port (default: uses `Genie.config.server_port`)
 - `id`: Debug ID for identifying the Stipple model
 - `frontend`: Frontend type - `:browser`, `:electron`, or `:none`
-- `backend`: Whether to start the backend model (default: true)
-- `backend_ready`: Function to check backend readiness
+- `backend`: Whether to start the backend model (default: `!startswith(url, r"https://"i)`)
+- `isready`: Function to check app readiness (default: `app -> app.isready === true`)
 
 ### Frontend Options
 

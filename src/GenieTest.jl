@@ -47,7 +47,11 @@ function Base.getproperty(app::App, fieldname::Symbol)
             field isa Reactive ? field[] : field
         end
     elseif app.__window__ !== nothing
-        run(app.__window__, unproxy("GENIEMODEL['$fieldname']"))
+        try
+            run(app.__window__, unproxy("GENIEMODEL['$fieldname']"))
+        catch _
+            nothing
+        end
     else
         @warn("App has neither model nor window")
     end
@@ -96,8 +100,8 @@ Base.notify(app::App, msg::AbstractString, type::Union{Nothing, String, Symbol} 
     port = nothing,
     id::String = string(uuid4()),
     frontend::Symbol = :browser,
-    backend::Bool = true,
-    backend_ready::Function = model -> model.isready[]
+    backend::Bool = !startswith(url, r"https://"i),
+    isready::Function = app -> app.isready
 )
 
 Create a Stipple App with optional frontend and backend.
@@ -127,8 +131,8 @@ function App(url::String;
     port = nothing,
     id::String = string(uuid4()),
     frontend::Symbol = :browser,
-    backend::Bool = true,
-    backend_ready::Function = model -> model.isready[],
+    backend::Bool = !startswith(url, r"https://"i),
+    isready::Function = app -> app.isready === true,
     electron_options::Dict{String, <:Any} = Dict{String, Any}()
 )
     port === nothing && (port = Genie.config.server_port)
@@ -152,29 +156,28 @@ function App(url::String;
     end
     model = nothing
     if backend
-        t0 = time()
         model = Stipple.debug_model(id; timeout)
         frontend == :none && (model.isready[] = true)
-
-        while time() < t0 + timeout
-            (model === nothing || backend_ready(model)) && break
-
-            @info """
-            waiting for App to be ready
-                backend_ready: $(backend_ready(model))
-            """
-            sleep(1)
-        end
-        println()
-        
-        if model !== nothing && !backend_ready(model)
-            close(win)
-            error("App could not be created")
-        end
     end
+    
+    app = App(model, win)
 
-    @info "App ready"
-    return App(model, win)
+    t0 = time()
+    print("Waiting for App to be ready ")
+    while !isready(app) && time() < t0 + timeout
+        sleep(1)    
+        print('.')
+    end
+    println()
+
+    if !isready(app) === true
+        # close(app)
+        @warn("App could not be created correctly")
+    else
+        @info "App ready"
+    end
+    
+    return app
 end
 
 function App(::Type{T}; kwargs...) where T <: ReactiveModel
