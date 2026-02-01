@@ -155,14 +155,17 @@ function App(url::String;
         nothing
     end
     model = nothing
+    t0 = time()
     if backend
         model = Stipple.debug_model(id; timeout)
         frontend == :none && (model.isready[] = true)
     end
     
     app = App(model, win)
-
-    t0 = time()
+    if model === nothing && win === nothing
+        @warn("App has neither frontend nor backend")
+        return app
+    end
     print("Waiting for App to be ready ")
     while !isready(app) && time() < t0 + timeout
         sleep(1)    
