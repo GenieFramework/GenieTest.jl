@@ -26,6 +26,6 @@ ui() = [htmldiv("Hello"), textfield(style = "max-width: 60px", "", :x)]
 end
 
 
-@testitem "Module Test" setup = [GTModule] begin
+@testitem "Module Test" setup = [TestModule] begin
     @test GenieTest.App isa DataType
 end
