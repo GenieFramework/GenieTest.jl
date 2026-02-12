@@ -1,7 +1,7 @@
 module GenieTest
 
 using Test
-export App, wait_for, notify_test
+export App, wait_for, notify_test, @App
 
 using Reexport
 @reexport using Stipple
@@ -10,13 +10,20 @@ using Reexport
 using Electron
 using UUIDs
 
-struct App
-    __model__::Union{ReactiveModel, Nothing}
-    __window__::Union{Window, Nothing}
-    __priority__::Base.RefValue{Symbol}
+abstract type DummyWindow end
+Base.run(w::Union{DummyWindow, Window}, code::JSONText) = run(w, json(code))
+
+Base.@kwdef mutable struct App
+    __model__::Union{ReactiveModel, Nothing} = nothing
+    __window__::Union{Window, Nothing} = nothing
+    __priority__::Symbol = :model
+    __url__::String = ""
+    __electron_options__::Dict{String, Any} = Dict{String, Any}()
+    __timeout__::Float64 = 30.0
+    __port__::Union{Int, Nothing} = nothing
 end
 
-App(model::Union{ReactiveModel, Nothing}, window::Union{Window, Nothing}, priority::Symbol = :model) = App(model, window, Ref(:model))
+const AppDict = Dict{Any, App}
 
 """
     unproxy(msg::String)
@@ -28,10 +35,10 @@ function unproxy(msg::String)
 end
 
 function Base.getproperty(app::App, fieldname::Symbol)
-    fieldname ∈ [:__model__, :__window__, :__priority__] && return getfield(app, fieldname)
+    fieldname ∈ fieldnames(App) && return getfield(app, fieldname)
 
-    if app.__priority__[] == :window && app.__window__ !== nothing
-        run(app.__window__, unproxy("GENIEMODEL['$fieldname']"))
+    if app.__priority__ == :window && app.__window__ !== nothing
+        run(app.__window__, unproxy("window?.GENIEMODEL?.['$fieldname']"))
     elseif app.__model__ !== nothing
         model = getfield(app, :__model__)
         if !hasproperty(model, fieldname)
@@ -47,18 +54,16 @@ function Base.getproperty(app::App, fieldname::Symbol)
             field isa Reactive ? field[] : field
         end
     elseif app.__window__ !== nothing
-        try
-            run(app.__window__, unproxy("GENIEMODEL['$fieldname']"))
-        catch _
-            nothing
-        end
+        run(app.__window__, unproxy("window?.GENIEMODEL?.['$fieldname']"))
     else
         @warn("App has neither model nor window")
     end
 end
 
 function Base.setproperty!(app::App, fieldname::Symbol, value)
-    if app.__priority__[] == :window && app.__window__ !== nothing
+    fieldname ∈ fieldnames(App) && return setfield!(app, fieldname, value)
+
+    if app.__priority__ == :window && app.__window__ !== nothing
         js_value = json(render(value))
         run(app.__window__, unproxy("GENIEMODEL['$fieldname'] = $js_value"))
     elseif app.__model__ !== nothing
@@ -96,10 +101,10 @@ Base.notify(app::App, msg::AbstractString, type::Union{Nothing, String, Symbol} 
 
 """
     App(url::String = "/";
-    timeout::Int = 30,
+    timeout::Float64 = 30,
     port = nothing,
     id::String = string(uuid4()),
-    frontend::Symbol = :browser,
+    frontend::Symbol = startswith(url, r"https://"i) || !backend ? :electron : :browser,
     backend::Bool = !startswith(url, r"https://"i),
     isready::Function = app -> app.isready
 )
@@ -109,7 +114,7 @@ Create a Stipple App with optional frontend and backend.
 - `url::String = "/"`: URL to open in the frontend. If it does not start with
   "http://" or "https://", it is assumed to be "http://localhost:port/".
 # Keyword Arguments
-- `timeout::Int = 10`: Timeout in seconds to wait for the backend to be ready.
+- `timeout::Float64 = 30`: Timeout in seconds to wait for the backend to be ready.
 - `port = nothing`: Port where the Genie server is running. If `nothing`,
   it uses `Genie.config.server_port`.
 - `id::String = string(uuid4())`: Debug ID used to identify the Stipple model
@@ -119,7 +124,7 @@ Create a Stipple App with optional frontend and backend.
   opens an Electron window. If `:none`, it does not open any frontend.
 - `backend::Bool = true`: Whether to start the backend Stipple model. If `false`,
   only the frontend is started. This can be useful for testing remote apps.
-- `backend_ready::Function = model -> model.isready[]`: Function to check if the
+- `backend_ready::Function = app -> app.isready === true`: Function to check if the
   backend is ready. It takes the Stipple model as argument and should return
   `true` if the backend is ready. By default, it checks the `isready` field
   of the model.
@@ -127,13 +132,14 @@ Create a Stipple App with optional frontend and backend.
 An `App` instance containing the backend model and the frontend window.
 """
 function App(url::String;
-    timeout::Int = 10,
+    timeout::Real = 30,
     port = nothing,
     id::String = string(uuid4()),
-    frontend::Symbol = :browser,
     backend::Bool = !startswith(url, r"https://"i),
+    frontend::Symbol = startswith(url, r"https://"i) || !backend ? :electron : :browser,
     isready::Function = app -> app.isready === true,
-    electron_options::Dict{String, <:Any} = Dict{String, Any}()
+    electron_options::Dict{String, <:Any} = Dict{String, Any}(),
+    priority::Symbol = :model
 )
     port === nothing && (port = Genie.config.server_port)
     println()
@@ -161,15 +167,17 @@ function App(url::String;
         frontend == :none && (model.isready[] = true)
     end
     
-    app = App(model, win)
+    app = App(model, win, priority, "$url", electron_options, float(timeout), port)
     if model === nothing && win === nothing
         @warn("App has neither frontend nor backend")
         return app
     end
     print("Waiting for App to be ready ")
-    while !isready(app) && time() < t0 + timeout
-        sleep(1)    
-        print('.')
+    dt = time() - t0
+    while !isready(app) && dt < timeout
+        delay = dt < 1 ? 0.1 : 1
+        sleep(delay)
+        delay > 1 && print('.')
     end
     println()
 
@@ -185,10 +193,28 @@ end
 
 function App(::Type{T}; kwargs...) where T <: ReactiveModel
     model = Stipple.ReactiveTools.init_model(T; kwargs...)
-    return App(model, nothing)
+    model.isready[] = true
+    return App(__model__ = model; kwargs...)
 end
 
 App(context::Module) = App(@eval context Stipple.@type)
+
+macro App()
+    :(App(@__MODULE__))
+end
+
+function Base.propertynames(app::App)
+    if app.__model__ !== nothing
+        tuple(propertynames(app.__model__)..., fieldnames(App)...)
+    elseif app.__window__ !== nothing
+        fnames = run(app.__window__, """
+            (x => Object.keys(x).filter(k => typeof x[k] !== 'function' && k !== 'WebChannel'))(window.GENIEMODEL || {})
+            """)
+        tuple(Symbol.(fnames)..., fieldnames(App)...)
+    else
+        fieldnames(App)
+    end
+end
 
 function Base.run(app::App, msg::Union{String, JSONText})
     msg isa JSONText && (msg = json(msg))
@@ -242,6 +268,33 @@ end
 
 function notify_test(app::App, test::Test.Result, test_str::AbstractString = "Test")
     notify_test(app.__model__, test, test_str)
+end
+
+function connect!(app::App; timeout = nothing, port = nothing, isready::Function = app -> app.isready === true)
+    if app.__window__ !== nothing && !app.__window__.exists
+        @info "App window appears to be closed. Recreating the window..."
+        try
+            a = App(
+                app.__url__,
+                frontend = :electron,
+                electron_options = app.__electron_options__,
+                priority = app.__priority__,
+                backend = app.__model__ !== nothing,
+                timeout = timeout === nothing ? app.__timeout__ : timeout,
+                port = port === nothing ? app.__port__ : port,
+            )
+            app.__model__ = a.__model__
+            app.__window__ = a.__window__
+            app.__port__ = a.__port__
+            app.__timeout__ = a.__timeout__
+            true
+        catch e
+            @warn "Failed to recreate app window: $e"
+            false
+        end
+    else
+        true
+    end
 end
 
 end # GenieTest
