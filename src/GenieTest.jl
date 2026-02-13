@@ -113,7 +113,21 @@ end
 # Will be moved to Stipple, therefore adding it here as a Union to prevent overwrite error.
 Base.getindex(model::Union{Nothing, ReactiveModel}, field::Symbol) = model === nothing ? nothing : getfield(model, field)
 
-Base.notify(app::App, field::Symbol) = app.__model__ !== nothing && notify(getfield(app.__model__, field))
+function Base.notify(app::App, field::Symbol, priorities = nothing; level::Int = 0)
+    # level is only introduced to support common calling via @notify macro
+    if app.__model__ !== nothing
+        if priorities === nothing
+            notify(getfield(app.__model__, field))
+        else
+            notify(getfield(app.__model__, field), priorities)
+        end
+    elseif app.__window__ !== nothing
+        run(app, js"""window?.GENIEMODEL?.push('$field')""")
+    else
+        false
+    end
+end
+
 Base.notify(app::App, msg::AbstractString, type::Union{Nothing, String, Symbol} = nothing; kwargs...) = app.__model__ !== nothing && notify(app.__model__, msg, type; kwargs...)
 
 """
