@@ -84,7 +84,10 @@ end
 Base.getindex(app::App, fieldname::Symbol) = getproperty(app, fieldname::Symbol)
 
 function Base.setindex!(app::App, value, fieldname::Symbol)
-    app.__model__ === nothing && return
+    if app.__model__ === nothing
+        @warn "App has no backend model to set field without notification"
+        return
+    end
     field = getfield(app.__model__, fieldname)
     if field isa Reactive
         getfield(field, :o).val = value
@@ -92,6 +95,20 @@ function Base.setindex!(app::App, value, fieldname::Symbol)
         setfield!(app.__model__, fieldname, value)
     end
 end
+
+function Base.setindex!(app::App, value, fieldname::Symbol, priorities)
+    if app.__model__ === nothing
+        @warn "App has no backend model to set field with priorities"
+        return
+    end
+    field = getfield(app.__model__, fieldname)
+    if field isa Reactive
+        setindex!(app.__model__, value, fieldname, priorities)
+    else
+        setfield!(app.__model__, fieldname, value)
+    end
+end
+
 
 # Will be moved to Stipple, therefore adding it here as a Union to prevent overwrite error.
 Base.getindex(model::Union{Nothing, ReactiveModel}, field::Symbol) = model === nothing ? nothing : getfield(model, field)
