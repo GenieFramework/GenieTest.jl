@@ -1,5 +1,6 @@
 module GenieTest
 
+using Test
 export App, wait_for, notify_test, @App
 
 using Reexport
