@@ -1,12 +1,11 @@
 module GenieTest
 
-using Test
 export App, wait_for, notify_test, @App
 
 using Reexport
 @reexport using Stipple
 @reexport using Stipple.ReactiveTools
-
+import HTTP
 using Electron
 using UUIDs
 
