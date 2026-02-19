@@ -10,8 +10,53 @@ using Reexport
 using Electron
 using UUIDs
 
+export toggle_devtools
+
 abstract type DummyWindow end
 Base.run(w::Union{DummyWindow, Window}, code::JSONText) = run(w, json(code))
+
+"""
+    unproxy(msg::String)
+
+Workaround for a JS Error in Electron when parsing proxy objects.
+"""
+function unproxy(msg::String)
+    "(x => (window.Vue) && Vue.isProxy(x) ? JSON.parse(JSON.stringify(x)) : x)($msg)"
+end
+
+function Base.getindex(win::Window, index::Union{AbstractString, JSONText})
+    index isa JSONText && (index = json(index))
+    startswith(index, '[') || (index = ".$index")
+    run(win, unproxy("GENIEMODEL$index"))
+end
+
+function Base.setindex!(win::Window, val, index::Union{AbstractString, JSONText})
+    index isa JSONText && (index = json(index))
+    startswith(index, '[') || (index = ".$index")
+    js_value = json(render(val))
+    code = if endswith(index, r"juliaGet\(\d+\)")
+        index = replace(index, r"juliaGet\((\d+)\)$" => s"juliaSet(\1")
+        "window?.GENIEMODEL$index, $js_value)"
+    else
+        """window?.GENIEMODEL.setField("$index", $js_value)"""
+    end
+    run(win, unproxy(code))
+end
+
+function Base.notify(win::Window, field::Symbol, priorities = nothing)
+    priorities === Stipple.ReactiveTools.NO_NOTIFY && return false
+    
+    # no listener priorities available on the client side, so only evaluate priorities for level 0
+    priorities isa Function && priorities(0) === false && return false
+    
+    run(app.__window__, js"""window?.GENIEMODEL?.push('$field')"""i)
+end
+
+function Base.notify(win::Window, message::AbstractString, type::Union{Nothing, String, Symbol} = nothing; kwargs...)
+    d = Stipple.opts(;type, message, kwargs...)
+    js_dict = strip(json(d), '"')
+    run(win, js"""window?.GENIEMODEL?.\$q.notify($js_dict); null"""i)
+end
 
 Base.@kwdef mutable struct App
     __model__::Union{ReactiveModel, Nothing} = nothing
@@ -25,20 +70,11 @@ end
 
 const AppDict = Dict{Any, App}
 
-"""
-    unproxy(msg::String)
-
-Workaround for a JS Error in Electron when parsing proxy objects.
-"""
-function unproxy(msg::String)
-    "(x => (window.Vue) && Vue.isProxy(x) ? JSON.parse(JSON.stringify(x)) : x)($msg)"
-end
-
 function Base.getproperty(app::App, fieldname::Symbol)
     fieldname ∈ fieldnames(App) && return getfield(app, fieldname)
 
     if app.__priority__ == :window && app.__window__ !== nothing
-        run(app.__window__, unproxy("window?.GENIEMODEL?.['$fieldname']"))
+        run(app.__window__, unproxy("window?.GENIEMODEL?.$fieldname"))
     elseif app.__model__ !== nothing
         model = getfield(app, :__model__)
         if !hasproperty(model, fieldname)
@@ -54,7 +90,7 @@ function Base.getproperty(app::App, fieldname::Symbol)
             field isa Reactive ? field[] : field
         end
     elseif app.__window__ !== nothing
-        run(app.__window__, unproxy("window?.GENIEMODEL?.['$fieldname']"))
+        run(app.__window__, unproxy("window?.GENIEMODEL?.$fieldname"))
     else
         @warn("App has neither model nor window")
     end
@@ -65,7 +101,7 @@ function Base.setproperty!(app::App, fieldname::Symbol, value)
 
     if app.__priority__ == :window && app.__window__ !== nothing
         js_value = json(render(value))
-        run(app.__window__, unproxy("GENIEMODEL['$fieldname'] = $js_value"))
+        run(app.__window__, unproxy("GENIEMODEL.$fieldname = $js_value"))
     elseif app.__model__ !== nothing
         field = getfield(app.__model__, fieldname)
         if field isa Reactive
@@ -74,14 +110,15 @@ function Base.setproperty!(app::App, fieldname::Symbol, value)
             setfield!(app.__model__, fieldname, value)
         end
     elseif app.__window__ !== nothing
-        js_value = json(render(value))
-        run(app.__window__, unproxy("GENIEMODEL['$fieldname'] = $js_value"))
+        app.__window__[String(fieldname)] = value
     else
         @warn("App has neither model nor window")
     end
 end
 
-Base.getindex(app::App, fieldname::Symbol) = getproperty(app, fieldname::Symbol)
+function Base.getindex(app::App, fieldname::Symbol)
+    getproperty(app, fieldname::Symbol)
+end
 
 function Base.setindex!(app::App, value, fieldname::Symbol)
     if app.__model__ === nothing
@@ -109,26 +146,35 @@ function Base.setindex!(app::App, value, fieldname::Symbol, priorities)
     end
 end
 
+function Base.getindex(app::App, index::Union{AbstractString, JSONText})
+    getindex(app.__window__, index)
+end
+
+function Base.setindex!(app::App, val, index::Union{AbstractString, JSONText})
+    setindex!(app.__window__, val, index)
+end
 
 # Will be moved to Stipple, therefore adding it here as a Union to prevent overwrite error.
 Base.getindex(model::Union{Nothing, ReactiveModel}, field::Symbol) = model === nothing ? nothing : getfield(model, field)
 
-function Base.notify(app::App, field::Symbol, priorities = nothing; level::Int = 0)
+function Base.notify(app::App, field::Symbol, priorities = nothing)
     # level is only introduced to support common calling via @notify macro
     if app.__model__ !== nothing
-        if priorities === nothing
-            notify(getfield(app.__model__, field))
-        else
-            notify(getfield(app.__model__, field), priorities)
-        end
+        notify(getfield(app.__model__, field), priorities)
     elseif app.__window__ !== nothing
-        run(app, js"""window?.GENIEMODEL?.push('$field')""")
+        notify(app.__window__, field, priorities)
     else
         false
     end
 end
 
-Base.notify(app::App, msg::AbstractString, type::Union{Nothing, String, Symbol} = nothing; kwargs...) = app.__model__ !== nothing && notify(app.__model__, msg, type; kwargs...)
+function Base.notify(app::App, message::AbstractString, type::Union{Nothing, String, Symbol} = nothing; kwargs...)
+    if app.__model__ !== nothing
+        notify(app.__model__, message, type; kwargs...)
+    else
+        notify(app.__window__, message, type; kwargs...)
+    end
+end
 
 """
     App(url::String = "/";
@@ -247,12 +293,12 @@ function Base.propertynames(app::App)
     end
 end
 
-function Base.run(app::App, msg::Union{String, JSONText})
-    msg isa JSONText && (msg = json(msg))
+function Base.run(app::App, msg::Union{AbstractString, JSONText}; timeout = 1)
     if app.__window__ !== nothing
+        msg isa JSONText && (msg = json(msg))
         run(app.__window__, unproxy(msg))
     elseif app.__model__ !== nothing
-        run(app.__model__, msg)
+        read(app.__model__, msg; timeout)
     end
 end
 
@@ -327,5 +373,7 @@ function connect!(app::App; timeout = nothing, port = nothing, isready::Function
         true
     end
 end
+
+Electron.toggle_devtools(app::App) = app.__window__ !== nothing && toggle_devtools(app.__window__)
 
 end # GenieTest
