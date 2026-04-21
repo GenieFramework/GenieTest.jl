@@ -24,6 +24,15 @@ function unproxy(msg::String)
     "(x => (window.Vue) && Vue.isProxy(x) ? JSON.parse(JSON.stringify(x)) : x)($msg)"
 end
 
+"""
+    jsclone(msg::String)
+
+Workaround for a JS Error in Electron when parsing proxy objects.
+"""
+function jsclone(msg::String)
+    "JSON.parse(JSON.stringify($msg))"
+end
+
 function Base.getindex(win::Window, index::Union{AbstractString, JSONText})
     index isa JSONText && (index = json(index))
     startswith(index, '[') || (index = ".$index")
@@ -293,10 +302,20 @@ function Base.propertynames(app::App)
     end
 end
 
-function Base.run(app::App, msg::Union{AbstractString, JSONText}; timeout = 1)
+function Base.run(app::App, msg::Union{AbstractString, JSONText}; timeout = 1, clone_result::Union{Bool, Nothing} = true)
     if app.__window__ !== nothing
         msg isa JSONText && (msg = json(msg))
-        run(app.__window__, unproxy(msg))
+        if clone_result === nothing # automatically clone if necessary
+            try
+                run(app.__window__, unproxy(msg))
+            catch
+                run(app.__window__, jsclone(msg))
+            end
+        elseif clone_result === true
+            run(app.__window__, jsclone(msg))
+        else
+            run(app.__window__, msg)
+        end
     elseif app.__model__ !== nothing
         read(app.__model__, msg; timeout)
     end
