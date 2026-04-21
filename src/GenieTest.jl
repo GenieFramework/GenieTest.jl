@@ -343,8 +343,17 @@ function notify_test(model::ReactiveModel, test::Test.Result, test_str::Abstract
     notify(model, "$test_str $(success ? "succeeded!" : "failed!")", type = success ? "positive" : "negative")
 end
 
+function notify_test(win::Window, test::Test.Result, test_str::AbstractString = "Test")
+    success = test isa Test.Pass
+    notify(win, "$test_str $(success ? "succeeded!" : "failed!")", type = success ? "positive" : "negative")
+end
+
 function notify_test(app::App, test::Test.Result, test_str::AbstractString = "Test")
-    notify_test(app.__model__, test, test_str)
+    if app.__model__ !== nothing
+        notify_test(app.__model__, test, test_str)
+    elseif app.__window__ !== nothing
+        notify_test(app.__window__, test, test_str)
+    end
 end
 
 function connect!(app::App; timeout = nothing, port = nothing, isready::Function = app -> app.isready === true)
