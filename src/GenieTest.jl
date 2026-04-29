@@ -247,7 +247,7 @@ function App(url::String;
         nothing
     end
     model = nothing
-    t0 = time()
+    
     if backend
         model = Stipple.debug_model(id; timeout)
         frontend == :none && (model.isready[] = true)
@@ -259,11 +259,13 @@ function App(url::String;
         return app
     end
     print("Waiting for App to be ready ")
+    t0 = time()
     dt = time() - t0
     while !isready(app) && dt < timeout
         delay = dt < 1 ? 0.1 : 1
         sleep(delay)
         delay > 1 && print('.')
+        dt = time() - t0
     end
     println()
 
