@@ -231,7 +231,8 @@ function App(url::String;
     println()
     @info "--------------   Starting App --------------"
     startswith(url, r"https?://"i) || (url = "http://localhost:$port/" * strip(url, '/'))
-    url = URI("$url?debug_id=$id")
+    url = URI(url)
+    url = URI(url, query = join(filter(!isempty, ["debug_id=$id", url.query]), '&'))
     win = if frontend == :electron
         # default to sandbox mode
         electron_options = Dict{String, Any}(electron_options)
