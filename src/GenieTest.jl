@@ -2,6 +2,7 @@ module GenieTest
 
 using Test
 export App, wait_for, notify_test, @App, connect!, redirect!, goto, is_reactive
+export click, get_html
 
 using Reexport
 @reexport using Stipple
@@ -608,6 +609,68 @@ function connect!(app::App; timeout = nothing, port = nothing, isready::Function
     else
         true
     end
+end
+
+"""
+    get_html(app::App, selector, index::Integer = 1; default = "")
+
+Get the HTML content of a DOM element matching the CSS selector.
+
+This function queries the frontend DOM and retrieves the HTML content of an element
+that matches the given CSS selector. When `index = 1`, it uses `querySelector` to get
+the first matching element. When `index > 1`, it uses `querySelectorAll` to select
+the element at the specified position (1-based indexing).
+
+# Arguments
+- `app::App`: The app instance to query.
+- `selector`: CSS selector string to identify the target element(s).
+- `index::Integer = 1`: The position of the element to select when multiple elements match (1-based).
+
+# Keyword Arguments
+- `default = "failed"`: Default value to return if the element is not found or the query fails.
+
+# Returns
+The HTML content of the matched element as a string, or the `default` value if not found.
+
+# Example
+```julia
+button_label = get_html(app, ".q-dialog .q-btn__content > span", default = "")
+second_button = get_html(app, "button", 2, default = "")
+```
+"""
+function get_html(app::App, selector, index::Integer = 1; default = "")
+    qs = index == 1 ? "querySelector('$selector')" : "querySelectorAll('$selector')?.[$index - 1]"
+    run(app, js"""window.document.$qs?.getHTML() || '$default'"""i, clone_result = false)
+end
+
+"""
+    click(app::App, selector, index::Integer = 1)
+
+Simulate a click event on a DOM element matching the CSS selector.
+
+This function finds an element in the frontend DOM that matches the given CSS selector
+and programmatically triggers a click event on it. When `index = 1`, it uses `querySelector`
+to get the first matching element. When `index > 1`, it uses `querySelectorAll` to select
+the element at the specified position (1-based indexing).
+
+# Arguments
+- `app::App`: The app instance containing the frontend.
+- `selector`: CSS selector string to identify the target element(s).
+- `index::Integer = 1`: The position of the element to click when multiple elements match (1-based).
+
+# Returns
+`true` if the element was found and clicked, `false` otherwise.
+
+# Examples
+```julia
+click(app, "button")
+click(app, "button", 2)  # Click the second button matching the selector
+click(app, ".q-tree__arrow")
+```
+"""
+function click(app::App, selector, index::Integer = 1)
+    qs = index == 1 ? "querySelector('$selector')" : "querySelectorAll('$selector')?.[$index - 1]"
+    run(app, js"""(el => !!el && !el.click())(document.$qs)"""i, clone_result = false)
 end
 
 Electron.toggle_devtools(app::App) = app.__window__ !== nothing && toggle_devtools(app.__window__)
