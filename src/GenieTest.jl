@@ -442,21 +442,21 @@ function wait_for(f; success = true, fail = false, timeout::Real = 10, delay::Re
     f() ? success : fail
 end
 
-function notify_test(model::ReactiveModel, test::Test.Result, test_str::AbstractString = "Test")
+function notify_test(model::ReactiveModel, test::Test.Result, test_str::AbstractString = "Test"; kwargs...)
     success = test isa Test.Pass
-    notify(model, "$test_str $(success ? "succeeded!" : "failed!")", type = success ? "positive" : "negative")
+    notify(model, "$test_str $(success ? "succeeded!" : "failed!")", type = success ? "positive" : "negative"; kwargs...)
 end
 
-function notify_test(win::Window, test::Test.Result, test_str::AbstractString = "Test")
+function notify_test(win::Window, test::Test.Result, test_str::AbstractString = "Test"; kwargs...)
     success = test isa Test.Pass
-    notify(win, "$test_str $(success ? "succeeded!" : "failed!")", type = success ? "positive" : "negative")
+    notify(win, "$test_str $(success ? "succeeded!" : "failed!")", type = success ? "positive" : "negative"; kwargs...)
 end
 
-function notify_test(app::App, test::Test.Result, test_str::AbstractString = "Test")
+function notify_test(app::App, test::Test.Result, test_str::AbstractString = "Test"; kwargs...)
     if app.__model__ !== nothing
-        notify_test(app.__model__, test, test_str)
+        notify_test(app.__model__, test, test_str; kwargs...)
     elseif app.__window__ !== nothing
-        notify_test(app.__window__, test, test_str)
+        notify_test(app.__window__, test, test_str; kwargs...)
     end
 end
 
