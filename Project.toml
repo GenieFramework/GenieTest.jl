@@ -1,7 +1,7 @@
 name = "GenieTest"
 uuid = "b272cc50-9a4f-43b1-8692-0510264c1fe6"
 authors = ["Helmut Hänsel <helmut.haensel@gmx.de>"]
-version = "0.3.7"
+version = "1.0.0"
 
 [deps]
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
@@ -17,11 +17,11 @@ UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 [compat]
 Dates = "1.6"
 Electron = "5, 6"
-Genie = "5.35.3"
-HTTP = "1"
+Genie = "5.35.3, 6"
+HTTP = "1, 2"
 Reexport = "1.2.2"
-Stipple = "0.31.46"
-StippleUI = "0.24.14"
+Stipple = "0.31.46, 1"
+StippleUI = "0.24.14, 1"
 Test = "1.6"
 TestItemRunner = "1.1.4"
 UUIDs = "1.6"
