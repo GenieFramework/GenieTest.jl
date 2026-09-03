@@ -1,11 +1,12 @@
-@testmodule TestModule begin
+@testmodule Setup begin
     using GenieTest
     export wait_for, notify_test, App, GenieTest
 
     using Genie
     export up, down
     using Stipple, Stipple.ReactiveTools
-    using StippleUI, StippleUI.textfield
+    using StippleUI
+    using StippleUI.FormInputs: textfield
 
     Stipple.enable_model_storage(false)
 
@@ -27,6 +28,6 @@
 end
 
 
-@testitem "Module Test" setup = [TestModule] begin
+@testitem "Module Test" setup = [Setup] begin
     @test GenieTest.App isa DataType
 end

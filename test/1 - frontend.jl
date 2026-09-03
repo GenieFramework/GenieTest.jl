@@ -1,4 +1,4 @@
-@testitem "Frontend Test" setup = [TestModule] begin
+@testitem "Frontend Test" setup = [Setup] tags=[:frontend] begin
     port = rand(8081:8999)
     down()
     up(port = port, ws_port = port)
