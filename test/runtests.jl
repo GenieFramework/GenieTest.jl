@@ -9,6 +9,8 @@ using Test, TestItemRunner
 end
 
 @testitem "App without frontend" tags=[:ci, :no_frontend] begin
+    using Stipple, Stipple.ReactiveTools
+
     @app MyApp begin
         @in x = [1, 2, 3, Dict(1 => 1, 2 => 2)]
         @in y = 10
