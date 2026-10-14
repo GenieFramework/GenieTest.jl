@@ -1,7 +1,7 @@
 name = "GenieTest"
 uuid = "b272cc50-9a4f-43b1-8692-0510264c1fe6"
 authors = ["Helmut Hänsel <helmut.haensel@gmx.de>"]
-version = "1.1.0"
+version = "2.0.0"
 
 [deps]
 Base64 = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
@@ -21,14 +21,14 @@ Dates = "1.6"
 Electron = "5, 6, 7"
 Genie = "5.35.3, 6"
 HTTP = "1, 2"
-JSON = "0.21, 1"
+JSON = "1"
 Reexport = "1.2.2"
 Stipple = "0.31.46, 1"
 StippleUI = "0.24.14, 1"
 Test = "1.6"
 TestItemRunner = "1.1.4"
-UUIDs = "1.6"
-julia = "1.6"
+UUIDs = "1.10"
+julia = "1.10"
 
 [extras]
 StippleUI = "a3c5d34a-b254-4859-a8fa-b86abb7e84a3"
