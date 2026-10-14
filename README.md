@@ -4,11 +4,11 @@ A Julia package for testing Stipple/Genie applications with integrated frontend 
 
 ## Overview
 
-GenieTest provides utilities for creating and testing Stipple-based web applications with both backend (Genie/Stipple reactive models) and frontend (browser or Electron) components. It simplifies the process of launching test applications and verifying their behavior.
+GenieTest provides utilities for creating and testing Stipple-based web applications with backend (Genie/Stipple reactive models) and frontend (browser, Electron, or headless WebChannel client) support. It simplifies the process of launching test applications and verifying their behavior.
 
 For this purpose we introduce `GenieTest.App` that behaves very much like a `ReactiveModel` with some subtle differences.
-- An `App` consists of the two fields `__model__` and `__window__`, which optionally contain a ReactiveModel (backend) and an Electron window (frontend)
-- Values are retrieved from the model, if available, or from the Electron window as a fallback. In the latter case only public fields are accessible and only fields declared with `@in` are sent to the backend.
+- An `App` has a `__model__` backend and a `__frontend__` frontend. The frontend can be `nothing`, an Electron `Window`, or a headless `Client`. `__window__` remains as a compatibility alias when the frontend is a `Window`.
+- Values are retrieved from the model, if available, or from the frontend as a fallback. The headless client exposes model fields declared by the page and sends updates through the Genie WebChannel.
 - The model fields are available via dot syntax as usual.
 - CAVEAT: The dot syntax always returns values and not Reactive variables. The reason is that the syntax should be identical independent whether we work with fronend or backend. Assignments are nevertheless reactive, e.g. `x = app.myfield` or `app.myfield = "newvalue"` will trigger reactive updates.
 - Silent updates are only possible if a model is available and can be written as `app[:myfield] = "silent update`. But in most cases you will better define `model = app.__model__` and continue with standard syntax for `model`
@@ -88,7 +88,7 @@ App(context::Module; kwargs)
 - `timeout`: Seconds to wait for backend readiness (default: 10)
 - `port`: Server port (default: uses `Genie.config.server_port`)
 - `id`: Debug ID for identifying the Stipple model
-- `frontend`: Frontend type - `:browser`, `:electron`, or `:none`
+- `frontend`: Frontend type - `:browser`, `:electron`, `:client`, or `:none`
 - `backend`: Whether to start the backend model (default: `!startswith(url, r"https://"i)`)
 - `isready`: Function to check app readiness (default: `app -> app.isready === true`)
 
@@ -104,9 +104,18 @@ app = App("/", frontend = :electron)
 # No frontend (headless mode)
 app = App("/", frontend = :none, backend = true)
 
+# Headless WebChannel client (no browser window)
+app = App("/", frontend = :client, backend = false)
+
 # Frontend only (connect to remote backend)
 app = App("https://remote-server.com", backend = false)
 ```
+
+When no backend model is available, `app.field` reads and `app.field = value` writes
+are forwarded to the headless client. The client supports reading and writing model
+fields with dot syntax or `getfield_` / `setfield_!`; its model fields are also
+available directly as `app.__frontend__.field`. JavaScript and DOM operations require
+an Electron `Window`.
 
 ### Utility Functions
 
