@@ -164,8 +164,8 @@ end
 
         # round trip through the frontend; the backend is used to inspect the result
         @test trigger_event(app, "ping", Dict("a" => 1); via = :frontend)
-        @test wait_for(() -> app.pinged == n + 2, app; timeout = 10)
-        @test occursin("a", app.ping_info)
+        # ping_info is set after pinged, so wait for both
+        @test wait_for(() -> app.pinged == n + 2 && occursin("a", app.ping_info), app; timeout = 10)
 
         # :auto follows the priority
         app.__priority__ = :frontend

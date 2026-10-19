@@ -24,8 +24,8 @@ end
     try
         n = app.pinged
         @test trigger_event(app, :ping, Dict("a" => 1); via = :frontend)
-        @test wait_for(() -> app.pinged == n + 1, app; timeout = 10)
-        @test occursin("a", app.ping_info)
+        # ping_info is set after pinged, so wait for both
+        @test wait_for(() -> app.pinged == n + 1 && occursin("a", app.ping_info), app; timeout = 10)
 
         app.__priority__ = :frontend
         @test trigger_event(app, "ping")
