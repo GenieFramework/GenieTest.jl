@@ -104,3 +104,34 @@ end
         down()
     end
 end
+
+@testitem "App priority" setup = [Setup] tags=[:ci] begin
+    @test_throws ArgumentError App(__priority__ = :fronted)
+
+    model = Stipple.ReactiveTools.init_model(Setup.MyApp)
+    client = Client()
+    getfield(client, :__fields__)["x"] = "from client"
+
+    app = App(__model__ = model, __frontend__ = client)
+    @test app.__priority__ === :backend
+    @test GenieTest.access_target(app) === :model
+    model.x[] = "from model"
+    @test app.x == "from model"
+    app.x = "set via model"
+    @test model.x[] == "set via model"
+    @test client.x == "from client"
+
+    app.__priority__ = :frontend
+    @test GenieTest.access_target(app) === :frontend
+    @test app.x == "from client"
+    @test :x ∈ propertynames(app)
+    @test_throws ArgumentError (app.__priority__ = :nonsense)
+
+    # without a model the frontend is used regardless of the priority
+    app.__priority__ = :backend
+    app.__model__ = nothing
+    @test GenieTest.access_target(app) === :frontend
+    @test app.x == "from client"
+
+    @test GenieTest.access_target(App()) === :none
+end

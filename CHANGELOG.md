@@ -19,6 +19,10 @@
   creating an `App` with a client frontend no longer fails if the connection fails.
 - Dropped the unused `Dates` dependency.
 
+- `priority` (`:backend` or `:frontend`) is now validated and applies uniformly to
+  `Window` and `Client` frontends in `getproperty`, `setproperty!` and `propertynames`.
+  `:window` is a deprecated alias for `:frontend`.
+
 ### Fixed
 - Removed the non-existent `waitfor` export.
 - Race conditions when accessing client fields and the client log.

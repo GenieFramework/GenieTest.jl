@@ -71,7 +71,8 @@ App(url::String = "/";
     id::String = string(uuid4()),
     frontend::Symbol = :browser,
     backend::Bool = true,
-    isready::Function = app -> app.isready === true
+    isready::Function = app -> app.isready === true,
+    priority::Symbol = :backend
 )
 
 App(T::Type{ReactiveModel}; kwargs...)
@@ -91,6 +92,11 @@ App(context::Module; kwargs)
 - `frontend`: Frontend type - `:browser`, `:electron`, `:client`, or `:none`
 - `backend`: Whether to start the backend model (default: `!startswith(url, r"https://"i)`)
 - `isready`: Function to check app readiness (default: `app -> app.isready === true`)
+- `priority`: `:backend` (default) or `:frontend`. If an app has both a backend model and a frontend
+  (`Window` or `Client`), `app.field` and `app.field = value` read and write the model for `:backend` and the
+  frontend for `:frontend`. This is useful to attach a backend for inspection and verify what the frontend
+  sees, e.g. whether JavaScript execution worked. If only one of them is available, it is used regardless of
+  the priority. The priority can be changed later with `app.__priority__ = :frontend`.
 
 ### Frontend Options
 

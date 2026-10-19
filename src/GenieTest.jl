@@ -84,6 +84,21 @@ mutable struct App
     __port__::Union{Int, Nothing}
 end
 
+"""
+    normalize_priority(priority::Symbol)
+
+Validate the access priority of an `App`: `:backend` (model first) or `:frontend`
+(window or client first). `:window` is a deprecated alias for `:frontend`.
+"""
+function normalize_priority(priority::Symbol)
+    if priority === :window
+        Base.depwarn("priority = :window is deprecated, use :frontend instead.", :normalize_priority)
+        return :frontend
+    end
+    priority ∈ (:backend, :frontend) || throw(ArgumentError("priority must be :backend or :frontend, got :$priority"))
+    priority
+end
+
 function App(;
     __model__::Union{ReactiveModel, Nothing} = nothing,
     __frontend__::Union{Nothing, Window, Client} = nothing,
@@ -96,7 +111,7 @@ function App(;
     __port__::Union{Int, Nothing} = nothing
 )
     frontend = __frontend__ === nothing ? __window__ : __frontend__
-    App(__model__, frontend, __priority__, __id__, __url__, __electron_options__, __timeout__, __port__)
+    App(__model__, frontend, normalize_priority(__priority__), __id__, __url__, __electron_options__, __timeout__, __port__)
 end
 
 function remove_id(url::Union{String, URI})::URI
@@ -112,6 +127,26 @@ end
 
 const AppDict = Dict{Any, App}
 
+"""
+    access_target(app::App)
+
+Return where model fields of `app` are read and written: `:model` (backend), `:frontend`
+or `:none`. If both a backend model and a usable frontend (a `Client` or an existing
+`Window`) are available, `app.__priority__` decides, otherwise the available one is used.
+"""
+function access_target(app::App)
+    model = getfield(app, :__model__)
+    frontend = getfield(app, :__frontend__)
+    frontend_usable = frontend isa Client || (frontend isa Window && frontend.exists)
+    if model === nothing
+        frontend_usable ? :frontend : :none
+    elseif frontend_usable && getfield(app, :__priority__) === :frontend
+        :frontend
+    else
+        :model
+    end
+end
+
 function Base.getproperty(app::App, fieldname::Symbol)
     if fieldname === :__window__
         frontend = getfield(app, :__frontend__)
@@ -120,9 +155,14 @@ function Base.getproperty(app::App, fieldname::Symbol)
     fieldname ∈ fieldnames(App) && return getfield(app, fieldname)
 
     frontend = getfield(app, :__frontend__)
-    if app.__priority__ ∈ (:window, :frontend) && frontend isa Window
-        run(frontend, unproxy("window?.GENIEMODEL?.$fieldname"))
-    elseif app.__model__ !== nothing
+    target = access_target(app)
+    if target === :frontend
+        if frontend isa Client
+            getproperty(frontend, fieldname)
+        else
+            run(frontend, unproxy("window?.GENIEMODEL?.$fieldname"))
+        end
+    elseif target === :model
         model = getfield(app, :__model__)
         if !hasproperty(model, fieldname)
             field_str = String(fieldname)
@@ -136,10 +176,6 @@ function Base.getproperty(app::App, fieldname::Symbol)
             field = getfield(model, fieldname)
             field isa Reactive ? field[] : field
         end
-    elseif frontend isa Client
-        getproperty(frontend, fieldname)
-    elseif frontend isa Window && frontend.exists
-        run(frontend, unproxy("window?.GENIEMODEL?.$fieldname"))
     else
         @warn("App has neither model nor active frontend")
     end
@@ -151,25 +187,31 @@ function Base.setproperty!(app::App, fieldname::Symbol, value)
         # clearing the window must not drop a Client frontend
         (value !== nothing || getfield(app, :__frontend__) isa Window) && setfield!(app, :__frontend__, value)
         return value
+    elseif fieldname === :__priority__
+        return setfield!(app, fieldname, normalize_priority(value))
     elseif fieldname ∈ fieldnames(App)
         return setfield!(app, fieldname, value)
     end
 
     frontend = getfield(app, :__frontend__)
-    if app.__priority__ ∈ (:window, :frontend) && frontend isa Window
-        js_value = json(render(value))
-        run(frontend, unproxy("GENIEMODEL.$fieldname = $js_value"))
-    elseif app.__model__ !== nothing
-        field = getfield(app.__model__, fieldname)
+    target = access_target(app)
+    if target === :frontend
+        if frontend isa Client
+            setproperty!(frontend, fieldname, value)
+        elseif getfield(app, :__model__) === nothing
+            frontend[String(fieldname)] = value
+        else
+            js_value = json(render(value))
+            run(frontend, unproxy("GENIEMODEL.$fieldname = $js_value"))
+        end
+    elseif target === :model
+        model = getfield(app, :__model__)
+        field = getfield(model, fieldname)
         if field isa Reactive
             field[] = value
         else
-            setfield!(app.__model__, fieldname, value)
+            setfield!(model, fieldname, value)
         end
-    elseif frontend isa Client
-        setproperty!(frontend, fieldname, value)
-    elseif frontend isa Window
-        frontend[String(fieldname)] = value
     else
         @warn("App has neither model nor frontend")
     end
@@ -263,7 +305,8 @@ end
     id::String = string(uuid4()),
     frontend::Symbol = startswith(url, r"https://"i) || !backend ? :electron : :browser,
     backend::Bool = !startswith(url, r"https://"i),
-    isready::Function = app -> app.isready
+    isready::Function = app -> app.isready,
+    priority::Symbol = :backend
 )
 
 Create a Stipple App with optional frontend and backend.
@@ -280,6 +323,12 @@ Create a Stipple App with optional frontend and backend.
   `:client`, or `:none`. If `:browser`, it opens the URL in the default browser. If
   `:electron`, it opens an Electron window. If `:client`, it connects a headless
   WebChannel client. If `:none`, it does not open any frontend.
+- `priority::Symbol = :backend`: Where `app.field` is read and written if both a backend
+  model and a frontend (`Window` or `Client`) are available: `:backend` (model first) or
+  `:frontend`. This allows e.g. to attach a backend for inspection while reading the values
+  as the frontend sees them. If only one side is available, it is used regardless of the
+  priority. Indexing with a string (`app["..."]`) always addresses the frontend,
+  `app[:field] = value` always the backend model (without notification).
 - `backend::Bool = true`: Whether to start the backend Stipple model. If `false`,
   only the frontend is started. This can be useful for testing remote apps.
 - `backend_ready::Function = app -> app.isready === true`: Function to check if the
@@ -338,7 +387,7 @@ function App(url::Union{String, URI};
         frontend == :none && (model.isready[] = true)
     end
     
-    app = App(model, frontend_instance, priority, id, "$uri", electron_options, float(timeout), port)
+    app = App(model, frontend_instance, normalize_priority(priority), id, "$uri", electron_options, float(timeout), port)
     if model === nothing && frontend_instance === nothing
         @warn("App has neither frontend nor backend")
         return app
@@ -405,7 +454,7 @@ All keyword arguments default to the current app's settings.
 - `frontend::Symbol`: Frontend type (`:electron`, `:browser`, `:client`, or `:none`).
 - `isready::Function`: Function to check if the backend is ready.
 - `electron_options::Dict{String, <:Any}`: Options for the Electron window.
-- `priority::Symbol`: Priority for getting/setting properties (`:backend` or `:frontend`).
+- `priority::Symbol`: Where properties are read and written if both a backend model and a frontend are available (`:backend` or `:frontend`).
 - `window::Union{Window, Nothing}`: Existing Electron window to reuse.
 
 # Returns
@@ -434,11 +483,12 @@ macro App()
 end
 
 function Base.propertynames(app::App)
-    if app.__model__ !== nothing
+    target = access_target(app)
+    if target === :model
         tuple(propertynames(app.__model__)..., fieldnames(App)...)
-    elseif app.__frontend__ isa Client
+    elseif target === :frontend && app.__frontend__ isa Client
         tuple(propertynames(app.__frontend__)..., fieldnames(App)...)
-    elseif app.__frontend__ isa Window && app.__frontend__.exists
+    elseif target === :frontend
         fnames = run(app.__frontend__, """
             (x => Object.keys(x).filter(k => typeof x[k] !== 'function' && k !== 'WebChannel'))(window?.GENIEMODEL || {})
             """)
