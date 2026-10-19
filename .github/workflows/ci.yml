@@ -15,10 +15,20 @@ jobs:
           - 'nightly'
         os:
           - ubuntu-latest
-          - macOS-latest
           - windows-latest
         arch:
           - x64
+        include:
+          # macOS-latest is an Apple Silicon (arm64) runner
+          - os: macOS-latest
+            arch: aarch64
+            version: '1.10'
+          - os: macOS-latest
+            arch: aarch64
+            version: '1'
+          - os: macOS-latest
+            arch: aarch64
+            version: 'nightly'
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@latest
