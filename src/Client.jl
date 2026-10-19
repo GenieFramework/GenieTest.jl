@@ -28,8 +28,8 @@ function Base.getproperty(client::Client, fieldname::Symbol)
         return getfield(client, fieldname)
     end
     fields = getfield(client, :__fields__)
-    haskey(fields, field) || error("Field $(fieldname) does not exist in client.")
     lock(getfield(client, :__changed__)) do
+        haskey(fields, field) || error("Field $(fieldname) does not exist in client.")
         fields[field]
     end
 end
@@ -135,7 +135,7 @@ function handle_message!(client::Client, message::AbstractString)
     end
     if message == "Subscription: OK"
         setfield!(client, :__ready__, true)
-        send_watch(client, "isready", true)
+        client.isready = true
     elseif startswith(message, "{") && endswith(message, "}")
         data = JSON.parse(message)
         if haskey(data, "key")
@@ -145,16 +145,46 @@ function handle_message!(client::Client, message::AbstractString)
             end
         end
     elseif startswith(message, ">eval:")
-        push!(getfield(client, :__log__), message)
+        lock(getfield(client, :__changed__)) do
+            push!(getfield(client, :__log__), message)
+        end
     end
 end
 
 """
-    connect!(client::Client; timeout = 15)
+    isconnected(client::Client)
+
+Return `true` if the websocket task is running and the model subscription is active.
+"""
+function isconnected(client::Client)
+    task = getfield(client, :__task__)
+    getfield(client, :__ready__) && task !== nothing && !istaskdone(task)
+end
+
+"""
+    connect!(client::Client; timeout = 15, force = false)
 
 Load the page, connect to its WebChannel, and subscribe to the Stipple model.
+Does nothing if the client is already connected, unless `force = true`.
+Returns `true` if the client is connected afterwards, `false` if the connection failed
+(the reason is logged as a warning).
 """
-function connect!(client::Client; timeout = 15)
+function connect!(client::Client; timeout = 15, force = false)
+    try
+        connect_client!(client; timeout, force)
+        true
+    catch exception
+        exception isa InterruptException && rethrow()
+        @warn "Failed to connect headless client: $exception"
+        false
+    end
+end
+
+function connect_client!(client::Client; timeout, force)
+    if isconnected(client)
+        force || return client
+        close(client)
+    end
     response = HTTP.get(getfield(client, :__base__) * getfield(client, :__page__); cookies = false)
     store_cookies!(client, response)
     html = String(response.body)
@@ -180,13 +210,15 @@ function connect!(client::Client; timeout = 15)
             end
         end
     catch exception
-        exception isa InterruptException || push!(getfield(client, :__log__), "ws error: " * sprint(showerror, exception))
+        exception isa InterruptException || lock(getfield(client, :__changed__)) do
+            push!(getfield(client, :__log__), "ws error: " * sprint(showerror, exception))
+        end
     finally
         setfield!(client, :__ready__, false)
         isopen(opened) && put!(opened, false)
     end)
-    take!(opened) || error("websocket failed: " * join(getfield(client, :__log__), "; "))
-    waitfor(() -> getfield(client, :__ready__), client; timeout, what = "subscription")
+    take!(opened) || error("websocket failed: " * lock(() -> join(getfield(client, :__log__), "; "), getfield(client, :__changed__)))
+    wait_for(() -> getfield(client, :__ready__), client; timeout) || error("timeout waiting for subscription")
     client
 end
 
@@ -216,17 +248,19 @@ function getfield_(client::Client, field::AbstractString, default = nothing)
 end
 
 """
-    waitfor(pred, client::Client; timeout = 10, what = "condition")
+    wait_for(pred, client::Client; success = true, fail = false, timeout = 10)
 
-Wait for a client model update until `pred()` is true or the timeout expires.
+Block until `pred()` is true, waking up on every model update received by the client.
+Returns `success`, or `fail` if the timeout expires. `pred` is evaluated while holding
+the client lock and must not block.
 """
-function waitfor(pred::Function, client::Client; timeout = 10, what = "condition")
+function wait_for(pred::Function, client::Client; success = true, fail = false, timeout::Real = 10, delay = nothing)
     deadline = time() + timeout
     condition = getfield(client, :__changed__)
     lock(condition) do
         while !pred()
             remaining = deadline - time()
-            remaining <= 0 && error("timeout waiting for $what")
+            remaining <= 0 && return fail
             timer = Timer(remaining)
             @async (try
                 wait(timer)
@@ -234,25 +268,12 @@ function waitfor(pred::Function, client::Client; timeout = 10, what = "condition
                     notify(condition; all = true)
                 end
             catch exception
-                exception isa InterruptException || rethrow()
+                # closing the timer after a regular wake-up ends the wait with an EOFError
+                exception isa Union{EOFError, InterruptException} || rethrow()
             end)
             wait(condition)
             close(timer)
         end
+        success
     end
-    true
-end
-
-function login!(client::Client, nickname, password; timeout = 15)
-    setfield_!(client, "nafnick", nickname)
-    setfield_!(client, "password", password)
-    setfield_!(client, "login_enter", true)
-    waitfor(() -> (user_id = getfield_(client, "user_id", -1); user_id isa Integer && user_id > 0),
-            client; timeout, what = "login of $nickname")
-    getfield_(client, "user_id")
-end
-
-function logout!(client::Client; timeout = 10)
-    setfield_!(client, "logout", true)
-    waitfor(() -> getfield_(client, "user_id", 0) == -1, client; timeout, what = "logout")
 end

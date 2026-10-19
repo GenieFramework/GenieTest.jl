@@ -47,3 +47,60 @@ end
     @test occursin("1 model field", summary)
     @test !occursin("__cookies__", summary)
 end
+
+@testitem "wait_for with a client" setup = [Setup] tags=[:ci] begin
+    client = Client()
+    fields = getfield(client, :__fields__)
+    condition = getfield(client, :__changed__)
+    update(value) = lock(condition) do
+        fields["a"] = value
+        notify(condition; all = true)
+    end
+
+    @test wait_for(() -> false, client; timeout = 0.2) === false
+    @test wait_for(() -> false, client; timeout = 0.2, success = :ok, fail = :failed) === :failed
+
+    @async (sleep(0.2); update(1))
+    t0 = time()
+    @test wait_for(() -> GenieTest.getfield_(client, "a") == 1, client; timeout = 5)
+    @test time() - t0 < 2
+
+    # via the app
+    app = App(__frontend__ = client)
+    @async (sleep(0.2); update(2))
+    @test wait_for(() -> app.a == 2, app; timeout = 5)
+    @test wait_for(() -> app.a == 3, app; timeout = 0.2) === false
+end
+
+@testitem "wait_for polling" setup = [Setup] tags=[:ci] begin
+    n = Ref(0)
+    @test wait_for(() -> (n[] += 1) >= 3; timeout = 5, delay = 0.01)
+    @test wait_for(() -> false; timeout = 0.1, delay = 0.01) === false
+end
+
+@testitem "Unreachable client" setup = [Setup] tags=[:ci] begin
+    client = Client("http://127.0.0.1:1")
+    @test connect!(client; timeout = 1) === false
+    @test !isconnected(client)
+
+    app = App(__frontend__ = client)
+    @test connect!(app; timeout = 1) === false
+end
+
+@testitem "Client against a live server" setup = [Setup] tags=[:ci] begin
+    port = 8765
+    up(port)
+    try
+        app = App("/"; frontend = :client, backend = false, port, timeout = 30)
+        client = app.__frontend__
+        @test client isa Client
+        @test isconnected(client)
+        @test connect!(app)
+        @test connect!(client)
+        @test wait_for(() -> app.x == "World", app; timeout = 10)
+        close(client)
+        @test !isconnected(client)
+    finally
+        down()
+    end
+end

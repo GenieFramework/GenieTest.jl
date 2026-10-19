@@ -1,7 +1,7 @@
 module GenieTest
 
 using Test
-export App, wait_for, notify_test, @App, connect!, redirect!, goto, is_reactive
+export App, wait_for, notify_test, connect!, redirect!, reload, goto, is_reactive
 export click, get_html
 
 using Reexport
@@ -14,7 +14,7 @@ using Electron
 using UUIDs
 
 export toggle_devtools
-export Client, close!, login!, logout!, setfield_!, getfield_, waitfor
+export Client, isconnected
 
 include("Client.jl")
 
@@ -76,7 +76,6 @@ end
 mutable struct App
     __model__::Union{ReactiveModel, Nothing}
     __frontend__::Union{Nothing, Window, Client}
-    __window__::Union{Window, Nothing}
     __priority__::Symbol
     __id__::String
     __url__::String
@@ -89,7 +88,7 @@ function App(;
     __model__::Union{ReactiveModel, Nothing} = nothing,
     __frontend__::Union{Nothing, Window, Client} = nothing,
     __window__::Union{Window, Nothing} = nothing,
-    __priority__::Symbol = :model,
+    __priority__::Symbol = :backend,
     __id__::String = "",
     __url__::String = "",
     __electron_options__::Dict{String, Any} = Dict{String, Any}(),
@@ -97,8 +96,7 @@ function App(;
     __port__::Union{Int, Nothing} = nothing
 )
     frontend = __frontend__ === nothing ? __window__ : __frontend__
-    window = frontend isa Window ? frontend : nothing
-    App(__model__, frontend, window, __priority__, __id__, __url__, __electron_options__, __timeout__, __port__)
+    App(__model__, frontend, __priority__, __id__, __url__, __electron_options__, __timeout__, __port__)
 end
 
 function remove_id(url::Union{String, URI})::URI
@@ -116,13 +114,13 @@ const AppDict = Dict{Any, App}
 
 function Base.getproperty(app::App, fieldname::Symbol)
     if fieldname === :__window__
-        window = getfield(app, :__window__)
-        return window === nothing && getfield(app, :__frontend__) isa Window ? getfield(app, :__frontend__) : window
+        frontend = getfield(app, :__frontend__)
+        return frontend isa Window ? frontend : nothing
     end
     fieldname ∈ fieldnames(App) && return getfield(app, fieldname)
 
     frontend = getfield(app, :__frontend__)
-    if app.__priority__ == :window && frontend isa Window
+    if app.__priority__ ∈ (:window, :frontend) && frontend isa Window
         run(frontend, unproxy("window?.GENIEMODEL?.$fieldname"))
     elseif app.__model__ !== nothing
         model = getfield(app, :__model__)
@@ -149,20 +147,16 @@ end
 
 function Base.setproperty!(app::App, fieldname::Symbol, value)
     if fieldname === :__window__
-        setfield!(app, :__window__, value)
-        value isa Window && setfield!(app, :__frontend__, value)
-        value === nothing && getfield(app, :__frontend__) isa Window && setfield!(app, :__frontend__, nothing)
-        return value
-    elseif fieldname === :__frontend__
-        setfield!(app, :__frontend__, value)
-        setfield!(app, :__window__, value isa Window ? value : nothing)
+        value isa Union{Window, Nothing} || throw(ArgumentError("__window__ must be a Window or nothing"))
+        # clearing the window must not drop a Client frontend
+        (value !== nothing || getfield(app, :__frontend__) isa Window) && setfield!(app, :__frontend__, value)
         return value
     elseif fieldname ∈ fieldnames(App)
         return setfield!(app, fieldname, value)
     end
 
     frontend = getfield(app, :__frontend__)
-    if app.__priority__ == :window && frontend isa Window
+    if app.__priority__ ∈ (:window, :frontend) && frontend isa Window
         js_value = json(render(value))
         run(frontend, unproxy("GENIEMODEL.$fieldname = $js_value"))
     elseif app.__model__ !== nothing
@@ -303,7 +297,7 @@ function App(url::Union{String, URI};
     frontend::Symbol = startswith(string(url), r"https://"i) || !backend ? :electron : :browser,
     isready::Function = app -> app.isready === true,
     electron_options::Dict{String, <:Any} = Dict{String, Any}(),
-    priority::Symbol = :model,
+    priority::Symbol = :backend,
     window::Union{Window, Nothing} = nothing
 )
     port === nothing && (port = Genie.config.server_port)
@@ -324,7 +318,11 @@ function App(url::Union{String, URI};
 
         Window(final_uri, options = electron_options)
     elseif frontend == :client
-        connect!(Client(final_uri); timeout)
+        # like a Window, a client that cannot connect yet does not abort the setup;
+        # connect!(app) can be used to establish the connection later
+        client = Client(final_uri)
+        connect!(client; timeout)
+        client
     elseif frontend == :browser
         Genie.Server.openbrowser(final_uri)
         nothing
@@ -332,7 +330,6 @@ function App(url::Union{String, URI};
         HTTP.get(final_uri)
         nothing
     end
-    win = frontend_instance isa Window ? frontend_instance : nothing
 
     model = nothing
     
@@ -341,7 +338,7 @@ function App(url::Union{String, URI};
         frontend == :none && (model.isready[] = true)
     end
     
-    app = App(model, frontend_instance, win, priority, id, "$uri", electron_options, float(timeout), port)
+    app = App(model, frontend_instance, priority, id, "$uri", electron_options, float(timeout), port)
     if model === nothing && frontend_instance === nothing
         @warn("App has neither frontend nor backend")
         return app
@@ -349,7 +346,9 @@ function App(url::Union{String, URI};
     print("Waiting for App to be ready ")
     t0 = time()
     dt = time() - t0
-    while !isready(app) && dt < timeout
+    # an unconnected client has no model fields yet, so errors count as "not ready"
+    app_ready() = try isready(app) === true catch; false end
+    while !app_ready() && dt < timeout
         delay = dt < 1 ? 0.1 : 1
         sleep(delay)
         delay > 1 && print('.')
@@ -357,7 +356,7 @@ function App(url::Union{String, URI};
     end
     println()
 
-    if !isready(app) === true
+    if !app_ready()
         # close(app)
         @warn("App could not be created correctly")
     else
@@ -406,7 +405,7 @@ All keyword arguments default to the current app's settings.
 - `frontend::Symbol`: Frontend type (`:electron`, `:browser`, `:client`, or `:none`).
 - `isready::Function`: Function to check if the backend is ready.
 - `electron_options::Dict{String, <:Any}`: Options for the Electron window.
-- `priority::Symbol`: Priority for getting/setting properties (`:model` or `:window`).
+- `priority::Symbol`: Priority for getting/setting properties (`:backend` or `:frontend`).
 - `window::Union{Window, Nothing}`: Existing Electron window to reuse.
 
 # Returns
@@ -517,14 +516,31 @@ function Base.show(io::IO, mime::MIME"text/plain", app::App)
     print_object(io, app, compact)
 end
 
-# Utility function to wait for a condition with timeout
-function wait_for(f; success = true, fail = false, timeout::Real = 10, delay::Real = 1)
+"""
+    wait_for(f; success = true, fail = false, timeout = 10, delay = 0.05)
+    wait_for(f, app::App; kwargs...)
+
+Wait until `f()` is true. Returns `success`, or `fail` if the timeout expires.
+For an `App` with a headless `Client` frontend the wait is event driven (`delay` is ignored),
+otherwise (or if the app has a backend model) `f` is polled every `delay` seconds.
+"""
+function wait_for(f; success = true, fail = false, timeout::Real = 10, delay::Real = 0.05)
     t0 = time()
     while time() < t0 + timeout
         f() && return success
         sleep(delay)
     end
     f() ? success : fail
+end
+
+function wait_for(f, app::App; kwargs...)
+    frontend = getfield(app, :__frontend__)
+    # with a backend model, changes are not pushed through the client, so poll
+    if frontend isa Client && getfield(app, :__model__) === nothing
+        wait_for(f, frontend; kwargs...)
+    else
+        wait_for(f; kwargs...)
+    end
 end
 
 function notify_test(model::ReactiveModel, test::Test.Result, test_str::AbstractString = "Test"; kwargs...)
@@ -605,6 +621,8 @@ function redirect!(app::App, url::Union{String, URI}; id = app.__id__)
     return app
 end
 
+reload(app::App) = redirect!(app, app.__url__)
+
 """
     goto(app::App, url::Union{String, URI}; id = app.__id__)
 
@@ -612,6 +630,8 @@ Navigate the app to a new URL by directly setting the window location.
 
 Unlike `redirect!`, this function does not update the app's internal state and performs
 a simple navigation by setting the window location. The URL is not merged with the base URL.
+For a headless `Client` frontend the client is closed and reconnected to the new page
+(relative URLs are resolved against the app's URL), while the app's stored URL and id are kept.
 
 # Arguments
 - `app::App`: The app instance to navigate.
@@ -624,6 +644,15 @@ a simple navigation by setting the window location. The URL is not merged with t
 The result of the JavaScript execution (typically `nothing`).
 """
 function goto(app::App, url::Union{String, URI}; id = app.__id__)
+    if app.__frontend__ isa Client
+        # a headless client has no window.location, so it reconnects to the new page;
+        # like for a window, the app's stored url and id stay untouched
+        stored_url, stored_id = app.__url__, app.__id__
+        close(app.__frontend__)
+        App(app, merge_uri(URI(stored_url), URI(url)); id)
+        app.__url__, app.__id__ = stored_url, stored_id
+        return nothing
+    end
     uri = add_id(url, id)
     run(app, "window.location = '$uri'")
 end
@@ -643,17 +672,24 @@ and ready for interaction. It checks the `window.GENIEMODEL.isready` property.
 `true` if the reactive model is ready, `false` otherwise (including if an error occurs).
 """
 function is_reactive(app::App)
+    app.__model__ === nothing && app.__frontend__ isa Client && return isconnected(app.__frontend__)
     try
         run(app, "window?.GENIEMODEL?.isready || false")
     catch
-        false
+        try
+            app.isready === true
+        catch
+            false
+        end
     end
 end
 
 """
     connect!(app::App; timeout = nothing, port = nothing, isready::Function = app -> app.isready === true)
 
-Ensure the app is connected and recreate the window if it has been closed.
+Ensure the app is connected: recreate the window if it has been closed, or (re)connect
+a headless client if it is not connected. Setting up an `App` never requires the
+connection to succeed, this function is the place to assert it.
 
 This function checks if the app's window exists and attempts to recreate it if it has been
 closed. If the window is already available, it returns `true` immediately.
@@ -675,23 +711,7 @@ recreation fails.
 """
 function connect!(app::App; timeout = nothing, port = nothing, isready::Function = app -> app.isready === true)
     if app.__frontend__ isa Client
-        try
-            a = App(
-                app.__url__,
-                id = app.__id__,
-                frontend = :client,
-                backend = app.__model__ !== nothing,
-                timeout = timeout === nothing ? app.__timeout__ : timeout,
-                port = port === nothing ? app.__port__ : port,
-            )
-            for field in fieldnames(App)
-                setfield!(app, field, getfield(a, field))
-            end
-            true
-        catch exception
-            @warn "Failed to recreate headless client: $exception"
-            false
-        end
+        connect!(app.__frontend__; timeout = timeout === nothing ? app.__timeout__ : timeout)
     elseif app.__frontend__ isa Window
         if !app.__frontend__.exists
             @info "App window appears to be closed. Recreating the window..."

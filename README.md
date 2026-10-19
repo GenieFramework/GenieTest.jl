@@ -117,6 +117,14 @@ fields with dot syntax or `getfield_` / `setfield_!`; its model fields are also
 available directly as `app.__frontend__.field`. JavaScript and DOM operations require
 an Electron `Window`.
 
+### Connecting
+
+`connect!(app)` ensures that the app is connected to its frontend and returns `true` or
+`false` (it never throws). For an Electron window it recreates a closed window, for a
+headless client it (re)connects the client. Creating an `App` does not require the
+connection to succeed, so use `connect!(app)` or `isconnected(client)` to assert it.
+`connect!(client)` behaves the same way on the client level; `close(client)` disconnects.
+
 ### Utility Functions
 
 #### wait_for
@@ -124,10 +132,15 @@ an Electron `Window`.
 Wait for a condition to become true with timeout:
 
 ```julia
-result = wait_for(timeout = 10, delay = 1) do
+result = wait_for(timeout = 10, delay = 0.05) do
     app.some_property[] == expected_value
 end
+
+# the same with an app: event driven for a headless client without backend model
+wait_for(() -> app.condition == "what", app; timeout = 10)
 ```
+
+Returns `success` (default `true`) or `fail` (default `false`) on timeout. The default polling `delay` is 0.05 s.
 
 #### notify_test
 
