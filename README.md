@@ -131,6 +131,27 @@ headless client it (re)connects the client. Creating an `App` does not require t
 connection to succeed, so use `connect!(app)` or `isconnected(client)` to assert it.
 `connect!(client)` behaves the same way on the client level; `close(client)` disconnects.
 
+### Events
+
+Stipple events (handlers defined with `@event`) are normally triggered by the frontend via
+`handle_event(event, 'name')`, which ends up in `notify(model, Val(:name), info)` on the backend.
+`trigger_event` triggers them from the test code:
+
+```julia
+@event MyApp :ping begin
+    pinged += 1
+end
+
+trigger_event(app, :ping)                         # path chosen by the app's priority
+trigger_event(app, :ping, Dict("a" => 1); via = :backend)   # call the handler directly on the model
+trigger_event(app, :ping; via = :frontend)        # send it from the frontend (Electron window or Client)
+wait_for(() -> app.pinged == 1, app)              # frontend events are handled asynchronously
+```
+
+With `via = :frontend` the full round trip is tested, `via = :backend` only the handler. With the default
+`via = :auto` the frontend is used if the app has `priority = :frontend` (or no backend model), otherwise
+the backend. A `Client` frontend can also be used directly: `trigger_event(client, :ping, info)`.
+
 ### Utility Functions
 
 #### wait_for

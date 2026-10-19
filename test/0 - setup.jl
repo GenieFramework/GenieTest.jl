@@ -18,8 +18,16 @@
     @app MyApp begin
         @in x = "World"
         
+        @in pinged = 0
+        @in ping_info = ""
+
         @onchange x println("x: $x")
         @onchange isready @info "Ready!"
+    end
+
+    @event MyApp :ping begin
+        pinged += 1
+        ping_info = string(event)
     end
 
     ui() = [htmldiv("Hello"), textfield(style = "max-width: 60px", "", :x)]
@@ -98,6 +106,7 @@ end
         @test connect!(app)
         @test connect!(client)
         @test wait_for(() -> app.x == "World", app; timeout = 10)
+        @test_throws ErrorException trigger_event(app, :ping; via = :backend)
         close(client)
         @test !isconnected(client)
     finally
@@ -134,4 +143,35 @@ end
     @test app.x == "from client"
 
     @test GenieTest.access_target(App()) === :none
+end
+
+
+@testitem "Trigger events" setup = [Setup] tags=[:ci] begin
+    @test_throws ArgumentError trigger_event(App(), :ping; via = :nowhere)
+    @test_throws ErrorException trigger_event(App(), :ping)
+
+    port = 8766
+    up(port)
+    try
+        # backend and headless client attached to the same model
+        app = App("/"; frontend = :client, backend = true, port, timeout = 30)
+        @test app.__model__ !== nothing && app.__frontend__ isa Client
+
+        n = app.pinged
+        @test trigger_event(app, :ping, "direct"; via = :backend)
+        @test app.pinged == n + 1
+        @test app.ping_info == "direct"
+
+        # round trip through the frontend; the backend is used to inspect the result
+        @test trigger_event(app, "ping", Dict("a" => 1); via = :frontend)
+        @test wait_for(() -> app.pinged == n + 2, app; timeout = 10)
+        @test occursin("a", app.ping_info)
+
+        # :auto follows the priority
+        app.__priority__ = :frontend
+        @test trigger_event(app, :ping)
+        @test wait_for(() -> app.pinged == n + 3, app; timeout = 10, delay = 0.05)
+    finally
+        down()
+    end
 end

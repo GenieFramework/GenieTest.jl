@@ -11,6 +11,9 @@
 - `App.__frontend__` (`Window`, `Client` or `nothing`); `__window__` remains as a
   compatibility alias.
 
+- `trigger_event(app, event, info = nothing; via = :auto)` to trigger Stipple events via the
+  backend model or from the frontend (Electron window or headless client).
+
 ### Changed
 - Requires Julia 1.10, Genie 6 and Stipple 1.
 - `wait_for` returns `success`/`fail` (default `true`/`false`) on all paths; the default

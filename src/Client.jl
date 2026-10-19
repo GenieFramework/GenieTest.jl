@@ -128,6 +128,17 @@ end
 send_watch(client::Client, field, value) = send_msg(client, "watchers",
     Dict("payload" => Dict("field" => field, "newval" => value, "oldval" => nothing, "sesstoken" => getfield(client, :__sesstoken__))))
 
+"""
+    trigger_event(client::Client, event, info = nothing)
+
+Send a Stipple event to the backend, like the JavaScript `handle_event(info, 'event')`
+of the frontend does. On the backend this calls `notify(model, Val(Symbol(event)), info)`.
+"""
+function trigger_event(client::Client, event::Union{Symbol, AbstractString}, info = nothing)
+    send_msg(client, "events", Dict("event" => Dict("name" => String(event), "event" => info)))
+    true
+end
+
 function handle_message!(client::Client, message::AbstractString)
     message = strip(message)
     if startswith(message, "base64:")

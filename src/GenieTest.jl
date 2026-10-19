@@ -2,7 +2,7 @@ module GenieTest
 
 using Test
 export App, wait_for, notify_test, connect!, redirect!, reload, goto, is_reactive
-export click, get_html
+export click, get_html, trigger_event
 
 using Reexport
 @reexport using Stipple
@@ -564,6 +564,48 @@ end
 function Base.show(io::IO, mime::MIME"text/plain", app::App)
     compact = get(io, :compact, false)
     print_object(io, app, compact)
+end
+
+"""
+    trigger_event(app::App, event, info = nothing; via = :auto)
+
+Trigger a Stipple event (see `@event`), i.e. call the handler `notify(model, Val(event), info)`.
+
+`via` selects the path:
+- `:backend`: the handler is called directly on the backend model.
+- `:frontend`: the event is sent from the frontend, as a UI element would do it
+  (`handle_event` in an Electron `Window`, an `events` WebChannel message for a `Client`).
+  This tests the full round trip.
+- `:auto` (default): `:frontend` or `:backend` according to the app's access priority
+  (see `App`), falling back to the one that is available.
+
+Returns `true` if the event was dispatched. Frontend events are handled asynchronously,
+use [`wait_for`](@ref) to wait for their effects.
+"""
+function trigger_event(app::App, event::Union{Symbol, AbstractString}, info = nothing; via::Symbol = :auto)
+    via ∈ (:auto, :backend, :frontend) || throw(ArgumentError("via must be :auto, :backend or :frontend, got :$via"))
+    model = getfield(app, :__model__)
+    frontend = getfield(app, :__frontend__)
+    frontend_usable = frontend isa Client || (frontend isa Window && frontend.exists)
+
+    if via === :auto
+        via = access_target(app) === :frontend ? :frontend : model !== nothing ? :backend : :frontend
+    end
+
+    if via === :backend
+        model === nothing && error("App has no backend model to trigger event $event.")
+        notify(model, Val(Symbol(event)), info)
+        true
+    elseif frontend_usable
+        if frontend isa Client
+            trigger_event(frontend, event, info)
+        else
+            run(frontend, "window.GENIEMODEL.handle_event($(json(render(info))), $(json(String(event)))); null")
+            true
+        end
+    else
+        error("App has no usable frontend to trigger event $event.")
+    end
 end
 
 """
