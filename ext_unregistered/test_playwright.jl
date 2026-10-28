@@ -1,4 +1,5 @@
 # Needs the (unregistered) Playwright package and a Chrome installation, therefore not part of the :ci tests.
+# Needs GenieTestPlaywrightExt.jl in ext/ and Playwright as a weakdep, see the README.
 @testitem "Playwright frontend" setup = [Setup] tags=[:playwright] begin
     using Playwright
     port = rand(8081:8999)
