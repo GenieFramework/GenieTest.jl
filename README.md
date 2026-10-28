@@ -8,9 +8,9 @@ GenieTest provides utilities for creating and testing Stipple-based web applicat
 
 A`GenieTest.App`behaves very much like a `ReactiveModel` with some subtle differences.
 
-- An `App` has a `__model__` backend and a `__frontend__` frontend. The frontend can be `nothing`, an Electron window (`ElectronFrontend`), a Playwright browser (`PlaywrightFrontend`) or a headless `Client`; all are subtypes of `GenieTest.AbstractFrontend`. `__window__` remains as a compatibility alias when the frontend is an Electron `Window`.
+- An `App` has a `__model__` backend and a `__frontend__` frontend. The frontend can be `nothing`, an Electron window (`ElectronFrontend`) or a headless `Client` (a Playwright browser is prepared, see below); all are subtypes of `GenieTest.AbstractFrontend`. `__window__` remains as a compatibility alias when the frontend is an Electron `Window`.
 - Values are retrieved from the `__model__`, if available, or from the `__frontend__` as a fallback.
-- There are currently three possible frontends: an Electron window, a Playwright browser (needs `using Playwright`) and a headless native julia client. The latter exposes model fields declared by the page and sends updates through the Genie WebChannel.
+- There are currently two possible frontends: an Electron window and a headless native julia client. The latter exposes model fields declared by the page and sends updates through the Genie WebChannel.
 - The model fields are available via dot syntax for backend and frontend including auto-completion.
 - CAVEAT: The dot syntax always returns values and not Reactive variables. The reason is that the syntax should be identical independent whether we work with fronend or backend. Assignments are nevertheless reactive, e.g. `x = app.myfield` or `app.myfield = "newvalue"` will trigger reactive updates.
 - Silent updates are only possible if a model is available and can be written as `app[:myfield] = "silent update`. But in most cases you will better define `model = app.__model__` and continue with standard syntax for `model`
@@ -111,9 +111,6 @@ app = App("/", frontend = :browser)
 # Open in Electron window (needs `using Electron`)
 app = App("/", frontend = :electron)
 
-# Playwright browser (needs `using Playwright`, see below)
-app = App("/", frontend = :playwright)
-
 # No frontend (headless mode)
 app = App("/", frontend = :none, backend = true)
 
@@ -128,20 +125,20 @@ When no backend model is available, `app.field` reads and `app.field = value` wr
 are forwarded to the headless client. The client supports reading and writing model
 fields with dot syntax or `getfield_` / `setfield_!`; its model fields are also
 available directly as `app.__frontend__.field`. JavaScript and DOM operations require
-a frontend with JavaScript support (Electron or Playwright).
+a frontend with JavaScript support (Electron).
 
-### Playwright
+### Playwright (preview)
 
-`frontend = :playwright` drives a real browser with [Playwright.jl](https://github.com/frankier/playwright-julia).
-It is provided by a package extension and therefore only available after `using Playwright`.
-By default it starts the installed Google Chrome (`engine = "chrome"`) with a visible window on a persistent
-profile in `joinpath(homedir(), ".julia", "playwright-profile")`. The profile keeps logins between runs (SSO,
-passkeys and platform authenticators only work with the real Chrome, not with the bundled Chromium),
-but it can only be used by one browser process. Therefore several apps with the same profile share one browser and
-each one gets its own tab; the browser is closed together with the last app.
+A `:playwright` frontend that drives a real browser with [Playwright.jl](https://github.com/frankier/playwright-julia)
+is prepared in `ext_unregistered/`. It is not a package extension yet, because Playwright.jl is not in the General
+registry and a registered package cannot depend on an unregistered one. Meanwhile you can enable it by hand:
 
 ```julia
+using Pkg
+Pkg.add(url = "https://github.com/frankier/playwright-julia")   # once, unregistered
+
 using GenieTest, Playwright
+include(joinpath(pkgdir(GenieTest), "ext_unregistered", "GenieTestPlaywrightExt.jl"))
 
 app = App("https://remote-server.com", backend = false, frontend = :playwright)
 
@@ -149,8 +146,18 @@ app = App("https://remote-server.com", backend = false, frontend = :playwright)
 app = App("/", frontend = :playwright, frontend_options = Dict(:headless => true, :profile => nothing))
 ```
 
-`frontend_options` accepts `:profile`, `:headless`, `:engine` and any other keyword of
-`Playwright.launch_persistent_context`.
+The `include` only adds methods to GenieTest. Do it once per Julia session, after `using Playwright`, and before the
+first `App(...; frontend = :playwright)`. `pkgdir(GenieTest)` works for an installed as well as for a developed GenieTest.
+
+By default it starts the installed Google Chrome (`engine = "chrome"`) with a visible window on a persistent
+profile in `joinpath(homedir(), ".julia", "playwright-profile")`. The profile keeps logins between runs (SSO,
+passkeys and platform authenticators only work with the real Chrome, not with the bundled Chromium),
+but it can only be used by one browser process. Therefore several apps with the same profile share one browser and
+each one gets its own tab; the browser is closed together with the last app.
+
+`frontend_options` accepts `:profile`, `:headless`, `:engine`, `:chromium_sandbox` and any other keyword of
+`Playwright.launch_persistent_context`. Once Playwright.jl is registered, the `include` will no longer be needed:
+`using Playwright` will be enough.
 
 ### Connecting
 
@@ -222,8 +229,8 @@ notify_test(model, result, "Value Check")
 
 - For local testing, the standard browser is probably the best choice. For remote testing Electron must be used, as the standard browser cannot be addressed via JavaScript from the test suite.
 - If you need to evaluate Javascript expressions in the frontend and send them to the backend, Electron is currently more convenient.
-- On MacOS Passkeys are, unfortunately, not supported via Electron. Use the `:playwright` frontend with the installed Chrome instead.
-- Electron and Playwright are optional: `frontend = :electron` needs `using Electron`, `frontend = :playwright` needs `using Playwright`.
+- On MacOS Passkeys are, unfortunately, not supported via Electron. A Playwright frontend with the installed Chrome is prepared, see above.
+- Electron is optional: `frontend = :electron` needs `using Electron`.
 
 ## License
 

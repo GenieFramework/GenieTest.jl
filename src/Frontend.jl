@@ -20,7 +20,7 @@ abstract type AbstractFrontend end
 """
     JSFrontend <: AbstractFrontend
 
-Supertype of frontends that run in a browser and evaluate JavaScript (Electron, Playwright).
+Supertype of frontends that run in a browser and evaluate JavaScript (Electron, and Playwright once it is available).
 Their model fields are available with dot syntax, `frontend.myfield` and `frontend.myfield = value`,
 including completion of the field names. Internal fields of such a frontend are named `__field__`.
 """

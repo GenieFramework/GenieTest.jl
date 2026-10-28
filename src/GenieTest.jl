@@ -276,7 +276,7 @@ Create a Stipple App with optional frontend and backend.
 - `id::String = string(uuid4())`: Debug ID used to identify the Stipple model
   in the backend.
 - `frontend::Symbol = :browser`: Frontend to use. Can be `:browser`, `:electron`,
-  `:client`, `:playwright` (needs `using Playwright`) or `:none`. If `:browser`, it opens the URL in the default browser. If
+  `:client` or `:none`. If `:browser`, it opens the URL in the default browser. If
   `:electron`, it opens an Electron window. If `:client`, it connects a headless
   WebChannel client. If `:none`, it does not open any frontend.
 - `priority::Symbol = :backend`: Where `app.field` is read and written if both a backend
@@ -286,7 +286,7 @@ Create a Stipple App with optional frontend and backend.
   priority. Indexing with a string (`app["..."]`) always addresses the frontend,
   `app[:field] = value` always the backend model (without notification).
 - `frontend_options::AbstractDict{Symbol} = Dict{Symbol, Any}()`: Options for the frontend, see the
-  documentation of the frontend (e.g. `:profile`, `:headless`, `:engine` for `:playwright`).
+  documentation of the frontend.
 - `backend::Bool = true`: Whether to start the backend Stipple model. If `false`,
   only the frontend is started. This can be useful for testing remote apps.
 - `backend_ready::Function = app -> app.isready === true`: Function to check if the
@@ -405,7 +405,7 @@ All keyword arguments default to the current app's settings.
 - `electron_options::Dict{String, <:Any}`: Options for the Electron window.
 - `priority::Symbol`: Where properties are read and written if both a backend model and a frontend are available (`:backend` or `:frontend`).
 - `window`: Existing Electron window to reuse.
-- `frontend_options::AbstractDict{Symbol}`: Options passed on to the frontend, e.g. `:profile` and `:headless` for `:playwright`.
+- `frontend_options::AbstractDict{Symbol}`: Options passed on to the frontend, see the documentation of the frontend.
 
 # Returns
 The modified `App` instance.
@@ -767,7 +767,7 @@ end
     connect!(app::App; kwargs...)
 
 Alias of [`assert_connection!`](@ref). It is public but not exported, because other packages
-(e.g. Playwright) export a `connect!` as well.
+(e.g. Stipple) export a `connect!` as well.
 """
 connect!(app::App; kwargs...) = assert_connection!(app; kwargs...)
 
