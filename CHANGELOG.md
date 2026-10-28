@@ -28,6 +28,9 @@
 
 ### Fixed
 - Field names of a page that uses a production build of Vue were not found.
+- `close(app)` with a backend model and an Electron frontend closed the page from the inside and then sent a
+  close command for the already destroyed window, which made the main process of Electron throw and
+  `close` hang. The frontend now closes its own window, and closing twice is harmless.
 
 ## 2.0.0
 

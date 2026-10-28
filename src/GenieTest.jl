@@ -458,9 +458,16 @@ function Base.run(app::App, msg::Union{AbstractString, JSONText}; timeout = 1, c
 end
 
 function Base.close(app::App)
-    app.__model__ !== nothing && run(app.__model__, "window.close()")
     frontend = app.__frontend__
-    frontend === nothing || close(frontend)
+    if frontend === nothing
+        # a page opened in the default browser can only be closed from the inside
+        app.__model__ !== nothing && run(app.__model__, "window.close()")
+    else
+        # The frontend closes its own window. Closing the page from the inside as well would destroy the
+        # window behind the back of the frontend, which then sends a command for a window that is gone.
+        close(frontend)
+    end
+    nothing
 end
 
 function print_object(io, app::App, compact = false)

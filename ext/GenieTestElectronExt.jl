@@ -22,7 +22,20 @@ end
 
 frontend_kind(::ElectronFrontend) = :electron
 is_usable(f::ElectronFrontend) = f.__window__.exists
-Base.close(f::ElectronFrontend) = close(f.__window__.app)
+# Closing must be idempotent: Electron.close(app) closes the windows one by one and the list of windows is updated
+# asynchronously, so a second close (or a close racing with the user closing the window) could send a command for a
+# window that is already gone, which makes the main process of Electron throw an uncaught exception.
+function Base.close(f::ElectronFrontend)
+    app = f.__window__.app
+    app.exists || return nothing
+    try
+        close(app)
+    catch
+        # the application has gone away in the meantime
+        app.exists && rethrow()
+    end
+    nothing
+end
 
 function Base.show(io::IO, f::ElectronFrontend)
     print(io, "Electron.Window(", f.__window__.exists ? "open" : "closed", ")")
