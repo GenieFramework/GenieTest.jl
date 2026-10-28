@@ -1,6 +1,7 @@
 @testmodule Setup begin
     using GenieTest
-    export wait_for, notify_test, App, GenieTest
+    using Electron
+    export wait_for, notify_test, App, GenieTest, assert_connection!
 
     using Genie
     export up, down
@@ -88,11 +89,11 @@ end
 
 @testitem "Unreachable client" setup = [Setup] tags=[:ci] begin
     client = Client("http://127.0.0.1:1")
-    @test connect!(client; timeout = 1) === false
-    @test !isconnected(client)
+    @test GenieTest.connect!(client; timeout = 1) === false
+    @test !is_connected(client)
 
     app = App(__frontend__ = client)
-    @test connect!(app; timeout = 1) === false
+    @test assert_connection!(app; timeout = 1) === false
 end
 
 @testitem "Client against a live server" setup = [Setup] tags=[:ci] begin
@@ -102,13 +103,13 @@ end
         app = App("/"; frontend = :client, backend = false, port, timeout = 30)
         client = app.__frontend__
         @test client isa Client
-        @test isconnected(client)
-        @test connect!(app)
-        @test connect!(client)
+        @test is_connected(client)
+        @test assert_connection!(app)
+        @test GenieTest.connect!(client)
         @test wait_for(() -> app.x == "World", app; timeout = 10)
         @test_throws ErrorException trigger_event(app, :ping; via = :backend)
         close(client)
-        @test !isconnected(client)
+        @test !is_connected(client)
     finally
         down()
     end

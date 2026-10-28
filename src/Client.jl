@@ -1,4 +1,4 @@
-mutable struct Client
+mutable struct Client <: AbstractFrontend
     __base__::String
     __page__::String
     __cookies__::Dict{String,String}
@@ -163,11 +163,11 @@ function handle_message!(client::Client, message::AbstractString)
 end
 
 """
-    isconnected(client::Client)
+    is_connected(client::Client)
 
 Return `true` if the websocket task is running and the model subscription is active.
 """
-function isconnected(client::Client)
+function is_connected(client::Client)
     task = getfield(client, :__task__)
     getfield(client, :__ready__) && task !== nothing && !istaskdone(task)
 end
@@ -192,7 +192,7 @@ function connect!(client::Client; timeout = 15, force = false)
 end
 
 function connect_client!(client::Client; timeout, force)
-    if isconnected(client)
+    if is_connected(client)
         force || return client
         close(client)
     end
