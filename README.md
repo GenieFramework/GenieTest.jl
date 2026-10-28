@@ -127,23 +127,18 @@ fields with dot syntax or `getfield_` / `setfield_!`; its model fields are also
 available directly as `app.__frontend__.field`. JavaScript and DOM operations require
 a frontend with JavaScript support (Electron).
 
-### Playwright (not yet released)
+### Playwright (preview)
 
 A `:playwright` frontend that drives a real browser with [Playwright.jl](https://github.com/frankier/playwright-julia)
-is prepared in `ext_unregistered/`. It cannot be a package extension of the registered GenieTest as long as
-Playwright.jl is not in the General registry. Until then it can be tried by copying `GenieTestPlaywrightExt.jl` to `ext/`
-and adding Playwright (`d777c63b-3b21-49c6-865f-99d0e068a423`) to `[weakdeps]`, `[extensions]` and `[compat]` of a
-developed copy of GenieTest.
-
-Once it is available, it is used after `using Playwright`.
-By default it starts the installed Google Chrome (`engine = "chrome"`) with a visible window on a persistent
-profile in `joinpath(homedir(), ".julia", "playwright-profile")`. The profile keeps logins between runs (SSO,
-passkeys and platform authenticators only work with the real Chrome, not with the bundled Chromium),
-but it can only be used by one browser process. Therefore several apps with the same profile share one browser and
-each one gets its own tab; the browser is closed together with the last app.
+is prepared in `ext_unregistered/`. It is not a package extension yet, because Playwright.jl is not in the General
+registry and a registered package cannot depend on an unregistered one. Meanwhile you can enable it by hand:
 
 ```julia
+using Pkg
+Pkg.add(url = "https://github.com/frankier/playwright-julia")   # once, unregistered
+
 using GenieTest, Playwright
+include(joinpath(pkgdir(GenieTest), "ext_unregistered", "GenieTestPlaywrightExt.jl"))
 
 app = App("https://remote-server.com", backend = false, frontend = :playwright)
 
@@ -151,8 +146,18 @@ app = App("https://remote-server.com", backend = false, frontend = :playwright)
 app = App("/", frontend = :playwright, frontend_options = Dict(:headless => true, :profile => nothing))
 ```
 
-`frontend_options` accepts `:profile`, `:headless`, `:engine` and any other keyword of
-`Playwright.launch_persistent_context`.
+The `include` only adds methods to GenieTest. Do it once per Julia session, after `using Playwright`, and before the
+first `App(...; frontend = :playwright)`. `pkgdir(GenieTest)` works for an installed as well as for a developed GenieTest.
+
+By default it starts the installed Google Chrome (`engine = "chrome"`) with a visible window on a persistent
+profile in `joinpath(homedir(), ".julia", "playwright-profile")`. The profile keeps logins between runs (SSO,
+passkeys and platform authenticators only work with the real Chrome, not with the bundled Chromium),
+but it can only be used by one browser process. Therefore several apps with the same profile share one browser and
+each one gets its own tab; the browser is closed together with the last app.
+
+`frontend_options` accepts `:profile`, `:headless`, `:engine`, `:chromium_sandbox` and any other keyword of
+`Playwright.launch_persistent_context`. Once Playwright.jl is registered, the `include` will no longer be needed:
+`using Playwright` will be enough.
 
 ### Connecting
 
