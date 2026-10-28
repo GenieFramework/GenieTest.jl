@@ -1,5 +1,34 @@
 # Changelog
 
+## 2.1.0
+
+### Added
+- `AbstractFrontend` as the common supertype of all frontends (`Client`, `JSFrontend`). Reading and
+  writing model fields, `notify`, `trigger_event` and navigation are defined once on top of `eval_js`.
+- Playwright frontend: `App(url; frontend = :playwright)` drives a browser with Playwright.jl
+  (needs `using Playwright`). It starts the installed Google Chrome on the persistent profile
+  `~/.julia/playwright-profile`, so logins, SSO and passkeys survive between runs. Apps on the same
+  profile share one browser and get one tab each.
+- `frontend_options` for `App` to pass options on to the frontend (`:profile`, `:headless`, `:engine`,
+  `:chromium_sandbox`, ... for Playwright).
+- Dot access to the model fields of browser frontends (`app.__frontend__.field`), including completion
+  of the field names.
+- `assert_connection!(app)`.
+
+### Changed
+- Electron is now a package extension (`GenieTestElectronExt`) and no longer a hard dependency.
+  Add `using Electron` to use `frontend = :electron`. `App("https://...")` still defaults to
+  Electron and raises an error that says so if Electron is not loaded.
+- `connect!(app)` was renamed to `assert_connection!(app)`. `connect!` is still public, but no longer
+  exported, because other packages (e.g. Playwright, Stipple) export a function of that name.
+- `isconnected(client)` was renamed to `is_connected(client)`, as it clashed with `Stipple.isconnected`.
+- `App.__frontend__` is an `AbstractFrontend` (an `ElectronFrontend` wraps the `Window`).
+  `app.__window__` still returns the `Window`.
+- An unknown `frontend` now raises an error instead of falling back to an `HTTP.get`.
+
+### Fixed
+- Field names of a page that uses a production build of Vue were not found.
+
 ## 2.0.0
 
 ### Added

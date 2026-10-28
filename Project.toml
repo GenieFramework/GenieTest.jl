@@ -1,7 +1,7 @@
 name = "GenieTest"
 uuid = "b272cc50-9a4f-43b1-8692-0510264c1fe6"
 authors = ["Helmut Hänsel <helmut.haensel@gmx.de>"]
-version = "2.0.0"
+version = "2.1.0"
 
 [deps]
 Base64 = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
