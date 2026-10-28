@@ -1,87 +1,46 @@
 module GenieTest
 
 using Test
-export App, wait_for, notify_test, connect!, redirect!, reload, goto, is_reactive
+export App, wait_for, notify_test, assert_connection!, redirect!, reload, goto, is_reactive
 export click, get_html, trigger_event
 
 using Reexport
 @reexport using Stipple
 @reexport using Stipple.ReactiveTools
 import HTTP
+using HTTP: URI
 using Base64
 using JSON
-using Electron
 using UUIDs
 
 export toggle_devtools
-export Client, isconnected
+export Client, is_connected
 
+include("Frontend.jl")
 include("Client.jl")
 
-abstract type DummyWindow end
-Base.run(w::Union{DummyWindow, Window}, code::JSONText) = run(w, json(code))
+frontend_kind(::Client) = :client
+has_js(::Client) = false
+is_usable(::Client) = true
 
-"""
-    unproxy(msg::String)
-
-Workaround for a JS Error in Electron when parsing proxy objects.
-"""
-function unproxy(msg::String)
-    "(x => (window.Vue) && Vue.isProxy(x) ? JSON.parse(JSON.stringify(x)) : x)($msg)"
-end
-
-"""
-    jsclone(msg::String)
-
-Workaround for a JS Error in Electron when parsing proxy objects.
-"""
-function jsclone(msg::String)
-    "JSON.parse(JSON.stringify($msg))"
-end
-
-function Base.getindex(win::Window, index::Union{AbstractString, JSONText})
-    index isa JSONText && (index = json(index))
-    startswith(index, '[') || (index = ".$index")
-    run(win, unproxy("GENIEMODEL$index"))
-end
-
-function Base.setindex!(win::Window, val, index::Union{AbstractString, JSONText})
-    index isa JSONText && (index = json(index))
-    startswith(index, '[') || (index = ".$index")
-    js_value = json(render(val))
-    code = if endswith(index, r"juliaGet\(\d+\)")
-        index = replace(index, r"juliaGet\((\d+)\)$" => s"juliaSet(\1")
-        "window?.GENIEMODEL$index, $js_value)"
-    else
-        """window?.GENIEMODEL.setField("$index", $js_value)"""
-    end
-    run(win, unproxy(code))
-end
-
-function Base.notify(win::Window, field::Symbol, priorities = nothing)
-    priorities === Stipple.ReactiveTools.NO_NOTIFY && return false
-    
-    # no listener priorities available on the client side, so only evaluate priorities for level 0
-    priorities isa Function && priorities(0) === false && return false
-    
-    run(win, js"""window?.GENIEMODEL?.push('$field')"""i)
-end
-
-function Base.notify(win::Window, message::AbstractString, type::Union{Nothing, String, Symbol} = nothing; kwargs...)
-    d = Stipple.opts(;type, message, kwargs...)
-    js_dict = strip(json(d), '"')
-    run(win, js"""window?.GENIEMODEL?.\$q.notify($js_dict); null"""i)
+function create_frontend(::Val{:client}, uri; timeout = 30, kwargs...)
+    # like a Window, a client that cannot connect yet does not abort the setup;
+    # assert_connection!(app) can be used to establish the connection later
+    client = Client(uri)
+    connect!(client; timeout)
+    client
 end
 
 mutable struct App
     __model__::Union{ReactiveModel, Nothing}
-    __frontend__::Union{Nothing, Window, Client}
+    __frontend__::Union{Nothing, AbstractFrontend}
     __priority__::Symbol
     __id__::String
     __url__::String
     __electron_options__::Dict{String, Any}
     __timeout__::Float64
     __port__::Union{Int, Nothing}
+    __frontend_options__::Dict{Symbol, Any}
 end
 
 """
@@ -101,17 +60,18 @@ end
 
 function App(;
     __model__::Union{ReactiveModel, Nothing} = nothing,
-    __frontend__::Union{Nothing, Window, Client} = nothing,
-    __window__::Union{Window, Nothing} = nothing,
+    __frontend__ = nothing,
+    __window__ = nothing,
     __priority__::Symbol = :backend,
     __id__::String = "",
     __url__::String = "",
     __electron_options__::Dict{String, Any} = Dict{String, Any}(),
     __timeout__::Float64 = 30.0,
-    __port__::Union{Int, Nothing} = nothing
+    __port__::Union{Int, Nothing} = nothing,
+    __frontend_options__::AbstractDict{Symbol} = Dict{Symbol, Any}()
 )
-    frontend = __frontend__ === nothing ? __window__ : __frontend__
-    App(__model__, frontend, normalize_priority(__priority__), __id__, __url__, __electron_options__, __timeout__, __port__)
+    frontend = as_frontend(__frontend__ === nothing ? __window__ : __frontend__)
+    App(__model__, frontend, normalize_priority(__priority__), __id__, __url__, __electron_options__, __timeout__, __port__, Dict{Symbol, Any}(__frontend_options__))
 end
 
 function remove_id(url::Union{String, URI})::URI
@@ -132,12 +92,12 @@ const AppDict = Dict{Any, App}
 
 Return where model fields of `app` are read and written: `:model` (backend), `:frontend`
 or `:none`. If both a backend model and a usable frontend (a `Client` or an existing
-`Window`) are available, `app.__priority__` decides, otherwise the available one is used.
+usable frontend) are available, `app.__priority__` decides, otherwise the available one is used.
 """
 function access_target(app::App)
     model = getfield(app, :__model__)
     frontend = getfield(app, :__frontend__)
-    frontend_usable = frontend isa Client || (frontend isa Window && frontend.exists)
+    frontend_usable = frontend !== nothing && is_usable(frontend)
     if model === nothing
         frontend_usable ? :frontend : :none
     elseif frontend_usable && getfield(app, :__priority__) === :frontend
@@ -150,7 +110,7 @@ end
 function Base.getproperty(app::App, fieldname::Symbol)
     if fieldname === :__window__
         frontend = getfield(app, :__frontend__)
-        return frontend isa Window ? frontend : nothing
+        return frontend_window(frontend)
     end
     fieldname ∈ fieldnames(App) && return getfield(app, fieldname)
 
@@ -160,7 +120,7 @@ function Base.getproperty(app::App, fieldname::Symbol)
         if frontend isa Client
             getproperty(frontend, fieldname)
         else
-            run(frontend, unproxy("window?.GENIEMODEL?.$fieldname"))
+            get_model_field(frontend, fieldname)
         end
     elseif target === :model
         model = getfield(app, :__model__)
@@ -183,9 +143,8 @@ end
 
 function Base.setproperty!(app::App, fieldname::Symbol, value)
     if fieldname === :__window__
-        value isa Union{Window, Nothing} || throw(ArgumentError("__window__ must be a Window or nothing"))
-        # clearing the window must not drop a Client frontend
-        (value !== nothing || getfield(app, :__frontend__) isa Window) && setfield!(app, :__frontend__, value)
+        # clearing the window must not drop a different frontend
+        (value !== nothing || frontend_window(getfield(app, :__frontend__)) !== nothing) && setfield!(app, :__frontend__, as_frontend(value))
         return value
     elseif fieldname === :__priority__
         return setfield!(app, fieldname, normalize_priority(value))
@@ -201,8 +160,7 @@ function Base.setproperty!(app::App, fieldname::Symbol, value)
         elseif getfield(app, :__model__) === nothing
             frontend[String(fieldname)] = value
         else
-            js_value = json(render(value))
-            run(frontend, unproxy("GENIEMODEL.$fieldname = $js_value"))
+            set_model_field!(frontend, fieldname, value)
         end
     elseif target === :model
         model = getfield(app, :__model__)
@@ -249,13 +207,13 @@ end
 
 function Base.getindex(app::App, index::Union{AbstractString, JSONText})
     frontend = app.__frontend__
-    frontend isa Window || error("JavaScript property access requires an Electron Window frontend.")
+    frontend === nothing && error("JavaScript property access requires a frontend with JavaScript support.")
     getindex(frontend, index)
 end
 
 function Base.setindex!(app::App, val, index::Union{AbstractString, JSONText})
     frontend = app.__frontend__
-    frontend isa Window || error("JavaScript property access requires an Electron Window frontend.")
+    frontend === nothing && error("JavaScript property access requires a frontend with JavaScript support.")
     setindex!(frontend, val, index)
 end
 
@@ -266,9 +224,7 @@ function Base.notify(app::App, field::Symbol, priorities = nothing)
     # level is only introduced to support common calling via @notify macro
     if app.__model__ !== nothing
         notify(getfield(app.__model__, field), priorities)
-    elseif app.__frontend__ isa Client
-        notify(app.__frontend__, field, priorities)
-    elseif app.__frontend__ isa Window
+    elseif app.__frontend__ !== nothing
         notify(app.__frontend__, field, priorities)
     else
         false
@@ -278,7 +234,7 @@ end
 function Base.notify(app::App, message::AbstractString, type::Union{Nothing, String, Symbol} = nothing; kwargs...)
     if app.__model__ !== nothing
         notify(app.__model__, message, type; kwargs...)
-    elseif app.__frontend__ isa Window
+    elseif app.__frontend__ !== nothing && has_js(app.__frontend__)
         notify(app.__frontend__, message, type; kwargs...)
     else
         false
@@ -320,15 +276,17 @@ Create a Stipple App with optional frontend and backend.
 - `id::String = string(uuid4())`: Debug ID used to identify the Stipple model
   in the backend.
 - `frontend::Symbol = :browser`: Frontend to use. Can be `:browser`, `:electron`,
-  `:client`, or `:none`. If `:browser`, it opens the URL in the default browser. If
+  `:client`, `:playwright` (needs `using Playwright`) or `:none`. If `:browser`, it opens the URL in the default browser. If
   `:electron`, it opens an Electron window. If `:client`, it connects a headless
   WebChannel client. If `:none`, it does not open any frontend.
 - `priority::Symbol = :backend`: Where `app.field` is read and written if both a backend
-  model and a frontend (`Window` or `Client`) are available: `:backend` (model first) or
+  model and a frontend (e.g. an Electron window or a `Client`) are available: `:backend` (model first) or
   `:frontend`. This allows e.g. to attach a backend for inspection while reading the values
   as the frontend sees them. If only one side is available, it is used regardless of the
   priority. Indexing with a string (`app["..."]`) always addresses the frontend,
   `app[:field] = value` always the backend model (without notification).
+- `frontend_options::AbstractDict{Symbol} = Dict{Symbol, Any}()`: Options for the frontend, see the
+  documentation of the frontend (e.g. `:profile`, `:headless`, `:engine` for `:playwright`).
 - `backend::Bool = true`: Whether to start the backend Stipple model. If `false`,
   only the frontend is started. This can be useful for testing remote apps.
 - `backend_ready::Function = app -> app.isready === true`: Function to check if the
@@ -347,7 +305,8 @@ function App(url::Union{String, URI};
     isready::Function = app -> app.isready === true,
     electron_options::Dict{String, <:Any} = Dict{String, Any}(),
     priority::Symbol = :backend,
-    window::Union{Window, Nothing} = nothing
+    window = nothing,
+    frontend_options::AbstractDict{Symbol} = Dict{Symbol, Any}()
 )
     port === nothing && (port = Genie.config.server_port)
     println()
@@ -356,22 +315,11 @@ function App(url::Union{String, URI};
     isempty(uri.scheme) && (uri = URI(uri; scheme = "http", host = "localhost", port, path = string('/', strip(uri.path, '/'))))
     final_uri = add_id(uri, id)
 
-    frontend_instance = if window !== nothing && window.exists
-        Electron.load(window, final_uri)
-        window
-    elseif frontend == :electron
-        # default to sandbox mode
-        electron_options = Dict{String, Any}(electron_options)
-        wp = get!(electron_options, "webPreferences", Dict{String, Any}())
-        electron_options["webPreferences"] = merge(Dict{String, Any}("sandbox" => true), wp)
-
-        Window(final_uri, options = electron_options)
-    elseif frontend == :client
-        # like a Window, a client that cannot connect yet does not abort the setup;
-        # connect!(app) can be used to establish the connection later
-        client = Client(final_uri)
-        connect!(client; timeout)
-        client
+    window_frontend = as_frontend(window)
+    frontend_instance = if window_frontend !== nothing && is_usable(window_frontend)
+        create_frontend(Val(:electron), final_uri; window)
+    elseif frontend ∉ (:browser, :none)
+        create_frontend(Val(frontend), final_uri; timeout, electron_options, frontend_options...)
     elseif frontend == :browser
         Genie.Server.openbrowser(final_uri)
         nothing
@@ -387,7 +335,7 @@ function App(url::Union{String, URI};
         frontend == :none && (model.isready[] = true)
     end
     
-    app = App(model, frontend_instance, normalize_priority(priority), id, "$uri", electron_options, float(timeout), port)
+    app = App(model, frontend_instance, normalize_priority(priority), id, "$uri", Dict{String, Any}(electron_options), float(timeout), port, Dict{Symbol, Any}(frontend_options))
     if model === nothing && frontend_instance === nothing
         @warn("App has neither frontend nor backend")
         return app
@@ -429,11 +377,12 @@ App(context::Module) = App(@eval context Stipple.@type)
         port = app.__port__,
         id::String = app.__id__,
         backend::Bool = app.__model__ !== nothing,
-        frontend::Symbol = app.__frontend__ isa Client ? :client : app.__frontend__ isa Window ? :electron : :none,
+        frontend::Symbol = app.__frontend__ === nothing ? :none : frontend_kind(app.__frontend__),
         isready::Function = app -> app.isready === true,
         electron_options::Dict{String, <:Any} = app.__electron_options__,
         priority::Symbol = app.__priority__,
-        window::Union{Window, Nothing} = app.__frontend__ isa Window ? app.__frontend__ : nothing
+        window = frontend_window(app.__frontend__),
+        frontend_options::AbstractDict{Symbol} = app.__frontend_options__
     )
 
 Reinitialize an existing app with new settings or URL.
@@ -455,7 +404,8 @@ All keyword arguments default to the current app's settings.
 - `isready::Function`: Function to check if the backend is ready.
 - `electron_options::Dict{String, <:Any}`: Options for the Electron window.
 - `priority::Symbol`: Where properties are read and written if both a backend model and a frontend are available (`:backend` or `:frontend`).
-- `window::Union{Window, Nothing}`: Existing Electron window to reuse.
+- `window`: Existing Electron window to reuse.
+- `frontend_options::AbstractDict{Symbol}`: Options passed on to the frontend, e.g. `:profile` and `:headless` for `:playwright`.
 
 # Returns
 The modified `App` instance.
@@ -465,13 +415,14 @@ function App(app::App, args...;
     port = app.__port__,
     id::String = app.__id__,
     backend::Bool = app.__model__ !== nothing,
-    frontend::Symbol = app.__frontend__ isa Client ? :client : app.__frontend__ isa Window ? :electron : :none,
+    frontend::Symbol = app.__frontend__ === nothing ? :none : frontend_kind(app.__frontend__),
     isready::Function = app -> app.isready === true,
     electron_options::Dict{String, <:Any} = app.__electron_options__,
     priority::Symbol = app.__priority__,
-    window::Union{Window, Nothing} = app.__frontend__ isa Window ? app.__frontend__ : nothing
+    window = frontend_window(app.__frontend__),
+    frontend_options::AbstractDict{Symbol} = app.__frontend_options__
 )
-    a = App(args...; timeout, port, id, backend, frontend, isready, electron_options, priority, window)
+    a = App(args...; timeout, port, id, backend, frontend, isready, electron_options, priority, window, frontend_options)
     for field in fieldnames(App)
         setfield!(app, field, getfield(a, field))
     end
@@ -489,10 +440,7 @@ function Base.propertynames(app::App)
     elseif target === :frontend && app.__frontend__ isa Client
         tuple(propertynames(app.__frontend__)..., fieldnames(App)...)
     elseif target === :frontend
-        fnames = run(app.__frontend__, """
-            (x => Object.keys(x).filter(k => typeof x[k] !== 'function' && k !== 'WebChannel'))(window?.GENIEMODEL || {})
-            """)
-        tuple(Symbol.(fnames)..., fieldnames(App)...)
+        tuple(model_fieldnames(app.__frontend__)..., fieldnames(App)...)
     else
         fieldnames(App)
     end
@@ -500,23 +448,8 @@ end
 
 function Base.run(app::App, msg::Union{AbstractString, JSONText}; timeout = 1, clone_result::Union{Bool, Nothing} = true)
     frontend = app.__frontend__
-    if frontend isa Window
-        if ! frontend.exists
-            @warn "Cannot run code on window, it probably has been closed."
-            return nothing
-        end
-        msg isa JSONText && (msg = json(msg))
-        if clone_result === nothing # automatically clone if necessary
-            try
-                run(frontend, unproxy(msg))
-            catch
-                run(frontend, jsclone(msg))
-            end
-        elseif clone_result === true
-            run(frontend, jsclone(msg))
-        else
-            run(frontend, msg)
-        end
+    if frontend !== nothing && has_js(frontend)
+        eval_js(frontend, msg; clone_result)
     elseif app.__model__ !== nothing
         read(app.__model__, msg; timeout)
     elseif frontend isa Client
@@ -525,10 +458,16 @@ function Base.run(app::App, msg::Union{AbstractString, JSONText}; timeout = 1, c
 end
 
 function Base.close(app::App)
-    app.__model__ !== nothing && run(app.__model__, "window.close()")
     frontend = app.__frontend__
-    frontend isa Window && close(frontend.app)
-    frontend isa Client && close(frontend)
+    if frontend === nothing
+        # a page opened in the default browser can only be closed from the inside
+        app.__model__ !== nothing && run(app.__model__, "window.close()")
+    else
+        # The frontend closes its own window. Closing the page from the inside as well would destroy the
+        # window behind the back of the frontend, which then sends a command for a window that is gone.
+        close(frontend)
+    end
+    nothing
 end
 
 function print_object(io, app::App, compact = false)
@@ -544,9 +483,7 @@ function print_object(io, app::App, compact = false)
     end
     frontend = app.__frontend__
     print(io, "    frontend: ")
-    if frontend isa Window
-        println(io, "Electron.Window(", frontend.exists ? "open" : "closed", ")")
-    elseif frontend isa Client
+    if frontend !== nothing
         show(io, frontend)
         println(io)
     else
@@ -586,7 +523,7 @@ function trigger_event(app::App, event::Union{Symbol, AbstractString}, info = no
     via ∈ (:auto, :backend, :frontend) || throw(ArgumentError("via must be :auto, :backend or :frontend, got :$via"))
     model = getfield(app, :__model__)
     frontend = getfield(app, :__frontend__)
-    frontend_usable = frontend isa Client || (frontend isa Window && frontend.exists)
+    frontend_usable = frontend !== nothing && is_usable(frontend)
 
     if via === :auto
         via = access_target(app) === :frontend ? :frontend : model !== nothing ? :backend : :frontend
@@ -597,12 +534,7 @@ function trigger_event(app::App, event::Union{Symbol, AbstractString}, info = no
         notify(model, Val(Symbol(event)), info)
         true
     elseif frontend_usable
-        if frontend isa Client
-            trigger_event(frontend, event, info)
-        else
-            run(frontend, "window.GENIEMODEL.handle_event($(json(render(info))), $(json(String(event)))); null")
-            true
-        end
+        trigger_event(frontend, event, info)
     else
         error("App has no usable frontend to trigger event $event.")
     end
@@ -640,11 +572,6 @@ function notify_test(model::ReactiveModel, test::Test.Result, test_str::Abstract
     notify(model, "$test_str $(success ? "succeeded!" : "failed!")", type = success ? "positive" : "negative"; kwargs...)
 end
 
-function notify_test(win::Window, test::Test.Result, test_str::AbstractString = "Test"; kwargs...)
-    success = test isa Test.Pass
-    notify(win, "$test_str $(success ? "succeeded!" : "failed!")", type = success ? "positive" : "negative"; kwargs...)
-end
-
 function notify_test(client::Client, test::Test.Result, test_str::AbstractString = "Test"; kwargs...)
     success = test isa Test.Pass
     notify(client, test_str * (success ? " succeeded!" : " failed!"))
@@ -653,9 +580,7 @@ end
 function notify_test(app::App, test::Test.Result, test_str::AbstractString = "Test"; kwargs...)
     if app.__model__ !== nothing
         notify_test(app.__model__, test, test_str; kwargs...)
-    elseif app.__frontend__ isa Window
-        notify_test(app.__frontend__, test, test_str; kwargs...)
-    elseif app.__frontend__ isa Client
+    elseif app.__frontend__ !== nothing
         notify_test(app.__frontend__, test, test_str; kwargs...)
     end
 end
@@ -764,7 +689,7 @@ and ready for interaction. It checks the `window.GENIEMODEL.isready` property.
 `true` if the reactive model is ready, `false` otherwise (including if an error occurs).
 """
 function is_reactive(app::App)
-    app.__model__ === nothing && app.__frontend__ isa Client && return isconnected(app.__frontend__)
+    app.__model__ === nothing && app.__frontend__ isa Client && return is_connected(app.__frontend__)
     try
         run(app, "window?.GENIEMODEL?.isready || false")
     catch
@@ -777,7 +702,7 @@ function is_reactive(app::App)
 end
 
 """
-    connect!(app::App; timeout = nothing, port = nothing, isready::Function = app -> app.isready === true)
+    assert_connection!(app::App; timeout = nothing, port = nothing, isready::Function = app -> app.isready === true)
 
 Ensure the app is connected: recreate the window if it has been closed, or (re)connect
 a headless client if it is not connected. Setting up an `App` never requires the
@@ -801,18 +726,20 @@ closed. If the window is already available, it returns `true` immediately.
 `true` if the connection is successful or if the window already exists, `false` if
 recreation fails.
 """
-function connect!(app::App; timeout = nothing, port = nothing, isready::Function = app -> app.isready === true)
+function assert_connection!(app::App; timeout = nothing, port = nothing, isready::Function = app -> app.isready === true)
     if app.__frontend__ isa Client
         connect!(app.__frontend__; timeout = timeout === nothing ? app.__timeout__ : timeout)
-    elseif app.__frontend__ isa Window
-        if !app.__frontend__.exists
+    elseif app.__frontend__ isa AbstractFrontend
+        if !is_usable(app.__frontend__)
             @info "App window appears to be closed. Recreating the window..."
             try
+                cleanup!(app.__frontend__)
                 a = App(
                     app.__url__,
                     id = app.__id__,
-                    frontend = :electron,
+                    frontend = frontend_kind(app.__frontend__),
                     electron_options = app.__electron_options__,
+                    frontend_options = app.__frontend_options__,
                     priority = app.__priority__,
                     backend = app.__model__ !== nothing,
                     timeout = timeout === nothing ? app.__timeout__ : timeout,
@@ -835,6 +762,14 @@ function connect!(app::App; timeout = nothing, port = nothing, isready::Function
         true
     end
 end
+
+"""
+    connect!(app::App; kwargs...)
+
+Alias of [`assert_connection!`](@ref). It is public but not exported, because other packages
+(e.g. Playwright) export a `connect!` as well.
+"""
+connect!(app::App; kwargs...) = assert_connection!(app; kwargs...)
 
 """
     get_html(app::App, selector, index::Integer = 1; default = "")
@@ -898,6 +833,6 @@ function click(app::App, selector, index::Integer = 1)
     run(app, js"""(el => !!el && !el.click())(document.$qs)"""i, clone_result = false)
 end
 
-Electron.toggle_devtools(app::App) = app.__frontend__ isa Window && toggle_devtools(app.__frontend__)
+toggle_devtools(app::App) = app.__frontend__ !== nothing && toggle_devtools(app.__frontend__)
 
 end # GenieTest

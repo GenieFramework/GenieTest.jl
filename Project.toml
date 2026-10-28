@@ -1,11 +1,10 @@
 name = "GenieTest"
 uuid = "b272cc50-9a4f-43b1-8692-0510264c1fe6"
 authors = ["Helmut Hänsel <helmut.haensel@gmx.de>"]
-version = "2.0.0"
+version = "2.1.0"
 
 [deps]
 Base64 = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
-Electron = "a1bb12fb-d4d1-54b4-b10a-ee7951ef7ad3"
 Genie = "c43c736e-a2d1-11e8-161f-af95117fbd1e"
 HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
@@ -15,11 +14,20 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 TestItemRunner = "f8b46487-2199-4994-9208-9a1283c18c0a"
 UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 
+[weakdeps]
+Electron = "a1bb12fb-d4d1-54b4-b10a-ee7951ef7ad3"
+Playwright = "d777c63b-3b21-49c6-865f-99d0e068a423"
+
+[extensions]
+GenieTestElectronExt = "Electron"
+GenieTestPlaywrightExt = "Playwright"
+
 [compat]
 Electron = "5, 6, 7"
 Genie = "6"
 HTTP = "1, 2"
 JSON = "1"
+Playwright = "0.1"
 Reexport = "1.2.2"
 Stipple = "1"
 StippleUI = "1"
@@ -29,7 +37,8 @@ UUIDs = "1.10"
 julia = "1.10"
 
 [extras]
+Electron = "a1bb12fb-d4d1-54b4-b10a-ee7951ef7ad3"
 StippleUI = "a3c5d34a-b254-4859-a8fa-b86abb7e84a3"
 
 [targets]
-test = ["StippleUI"]
+test = ["Electron", "StippleUI"]
