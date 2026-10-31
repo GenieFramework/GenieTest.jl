@@ -1,13 +1,29 @@
 # Changelog
 
+## 2.2.0
+
+### Added
+- `:playwright` frontend as a package extension (`GenieTestPlaywrightExt`). Load it with `using Playwright`,
+  Playwright.jl is a weak dependency. Frontends on the same profile share one browser (one tab per app).
+- Browser fallback: `engine` defaults to `["chrome", "msedge", "chromium"]`, the first one that can be
+  launched is used. The Chromium of `Playwright.install(browsers = ["chromium"])` is the last resort.
+- `@get` and `@set` follow the same rule as `app.field` (backend model unless there is none or
+  `app.__priority__ == :frontend`) and work with all frontends. Needs Stipple 1.2.4.
+  Nested access is documented in the README.
+
+### Changed
+- Tests share one `Setup` app, files and test items are renamed, and the Playwright tests run on CI.
+
+### Fixed
+- The Playwright extension was missing in `[extensions]` and therefore never loaded.
+
 ## 2.1.0
 
 ### Added
 - `AbstractFrontend` as the common supertype of all frontends (`Client`, `JSFrontend`). Reading and
   writing model fields, `notify`, `trigger_event` and navigation are defined once on top of `eval_js`.
 - `frontend_options` for `App` to pass options on to the frontend.
-- A Playwright frontend is prepared in `ext_unregistered/` but not yet part of the package, because
-  Playwright.jl is not registered. See the README.
+- A Playwright frontend was prepared in `ext_unregistered/` (now part of the package, see 2.2.0).
 - Dot access to the model fields of browser frontends (`app.__frontend__.field`), including completion
   of the field names.
 - `assert_connection!(app)`.
