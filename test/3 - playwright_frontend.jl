@@ -1,12 +1,12 @@
-# Needs the (unregistered) Playwright package and a Chrome installation, therefore not part of the :ci tests.
+# Needs the Playwright package and a browser (Chrome, Edge or the Chromium that Playwright installs).
 # Needs GenieTestPlaywrightExt.jl in ext/ and Playwright as a weakdep, see the README.
-@testitem "Playwright frontend" setup = [Setup] tags=[:playwright] begin
+@testitem "Playwright frontend" setup = [Setup] tags=[:ci, :frontend, :playwright] begin
     using Playwright
     port = rand(8081:8999)
     down()
     up(port = port, ws_port = port)
 
-    app = App("/"; frontend = :playwright, port, frontend_options = Dict(:headless => true, :profile => mktempdir()))
+    app = App("/"; frontend = :playwright, port, frontend_options = Dict(:headless => true, :chromium_sandbox => false, :profile => mktempdir()))
     try
         @test GenieTest.is_usable(app.__frontend__)
         @test app.__window__ === nothing
@@ -19,7 +19,7 @@
         @test run(app, "1 + 1") === 2
 
         n = app.pinged
-        @test trigger_event(app, :ping, Dict("a" => 1); via = :frontend)
+        @test GenieTest.trigger_event(app, :ping, Dict("a" => 1); via = :frontend)
         @test wait_for(() -> app.pinged == n + 1 && occursin("a", app.ping_info), app; timeout = 10)
 
         @test notify(app, "hello")
@@ -35,14 +35,14 @@
     end
 end
 
-@testitem "Playwright frontends share the browser of a profile" setup = [Setup] tags=[:playwright] begin
+@testitem "Shared browser per profile in Playwright" setup = [Setup] tags=[:ci, :frontend, :playwright] begin
     using Playwright
     ext = Base.get_extension(GenieTest, :GenieTestPlaywrightExt)
     port = rand(8081:8999)
     down()
     up(port = port, ws_port = port)
 
-    options = Dict(:headless => true, :profile => mktempdir())
+    options = Dict(:headless => true, :chromium_sandbox => false, :profile => mktempdir())
     app = App("/"; frontend = :playwright, port, frontend_options = options)
     app2 = App("/"; frontend = :playwright, port, frontend_options = options)
     try

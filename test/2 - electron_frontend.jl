@@ -1,4 +1,5 @@
-@testitem "Frontend Test" setup = [Setup] tags=[:frontend] begin
+@testitem "Electron frontend" setup = [Setup] tags=[:frontend] begin
+    using Electron
     port = rand(8081:8999)
     down()
     up(port = port, ws_port = port)
@@ -16,6 +17,7 @@
 end
 
 @testitem "Trigger events from an Electron window" setup = [Setup] tags=[:frontend] begin
+    using Electron
     port = rand(8081:8999)
     down()
     up(port = port, ws_port = port)

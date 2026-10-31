@@ -1,6 +1,5 @@
 @testmodule Setup begin
     using GenieTest
-    using Electron
     export wait_for, notify_test, App, GenieTest, assert_connection!
 
     using Genie
@@ -22,8 +21,16 @@
         @in pinged = 0
         @in ping_info = ""
 
+        @in list = [1, 2, 3, Dict(1 => 1, 2 => 2)]
+        @in y = 10
+
         @onchange x println("x: $x")
         @onchange isready @info "Ready!"
+        @onchange list begin
+            println("list: $list")
+            @notify("Message to UI: $list")
+            y = list[1] + 1
+        end
     end
 
     @event MyApp :ping begin

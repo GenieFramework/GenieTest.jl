@@ -6,6 +6,7 @@ using Playwright
 
 import GenieTest: frontend_kind, is_usable, eval_js, create_frontend, cleanup!, unproxy, js_clone
 
+const DEFAULT_ENGINES = ["chrome", "msedge", "chromium"]
 const DEFAULT_PROFILE = joinpath(homedir(), ".julia", "playwright-profile")
 
 # A browser profile can only be used by one browser process. Launching a second browser on the same profile
@@ -105,8 +106,10 @@ Start a Playwright browser on the persistent profile directory `profile` and loa
   the same profile share one browser and each gets its own tab (the options of the first app apply).
   The browser is closed with the last app. `nothing` uses a separate temporary profile.
 - `headless = false`: show the browser window.
-- `engine = "chrome"`: the engine passed to `Playwright.engine`. Passkeys and platform authenticators
-  need the real Google Chrome; the bundled `"chromium"` only offers security keys.
+- `engine = ["chrome", "msedge", "chromium"]`: the engine(s) passed to `Playwright.engine`, tried in order until
+  one can be launched. `"chrome"` and `"msedge"` use an installed Google Chrome / Microsoft Edge, `"chromium"` is
+  the browser binary that Playwright downloads itself (`Playwright.install(browsers = ["chromium"])`; it is also
+  fetched on demand if possible). Passkeys and platform authenticators need a real Chrome or Edge.
 
 - `chromium_sandbox = true`: keep Chromium's sandbox. Playwright's default (`false`) starts Chrome with `--no-sandbox`,
   which makes Chrome show an "unsupported command-line flag" warning.
@@ -116,12 +119,13 @@ Further options are passed to `Playwright.launch_persistent_context`.
 function create_frontend(::Val{:playwright}, uri;
     profile::Union{AbstractString, Nothing} = DEFAULT_PROFILE,
     headless::Bool = false,
-    engine::AbstractString = "chrome",
+    engine::Union{AbstractString, AbstractVector{<:AbstractString}} = DEFAULT_ENGINES,
     chromium_sandbox::Bool = true,
     timeout = 30,
     electron_options = nothing,
     launch_options...
 )
+    engines = engine isa AbstractString ? [engine] : collect(String, engine)
     profile === nothing && (profile = mktempdir())
     mkpath(profile)
     key = realpath(profile)
@@ -137,7 +141,7 @@ function create_frontend(::Val{:playwright}, uri;
         if session === nothing
             pw = Playwright.start_playwright()
             try
-                ctx = Playwright.launch_persistent_context(Playwright.engine(pw, engine), profile; headless, chromium_sandbox, launch_options...)
+                ctx = launch_context(pw, engines, profile; headless, chromium_sandbox, launch_options...)
                 session = SESSIONS[key] = Session(key, pw, ctx, 0)
                 # a persistent context comes with a page, which is used by the first frontend
                 page = first(Playwright.pages(ctx))
@@ -150,6 +154,21 @@ function create_frontend(::Val{:playwright}, uri;
         end
         new_frontend(session, Playwright.new_page(session.context), uri)
     end
+end
+
+function launch_context(pw, engines, profile; kwargs...)
+    errors = Pair{String, Any}[]
+    for name in engines
+        try
+            return Playwright.launch_persistent_context(Playwright.engine(pw, name), profile; kwargs...)
+        catch e
+            push!(errors, name => e)
+            length(engines) > 1 && @info "Could not launch Playwright engine \"$name\", trying the next one." exception = e
+        end
+    end
+    length(errors) == 1 && throw(last(only(errors)))
+    error("None of the Playwright engines $(join(repr.(engines), ", ")) could be launched. " *
+        "Install Chrome or Edge, or run `Playwright.install(browsers = [\"chromium\"])`.")
 end
 
 session_pages(session::Session) = try Playwright.pages(session.context) catch; Playwright.Page[] end
