@@ -107,6 +107,9 @@ function access_target(app::App)
     end
 end
 
+# lets `@get`/`@set` of Stipple.ReactiveTools follow the same rule as `app.field`
+Stipple.ReactiveTools.use_frontend(app::App) = access_target(app) !== :model
+
 function Base.getproperty(app::App, fieldname::Symbol)
     if fieldname === :__window__
         frontend = getfield(app, :__frontend__)

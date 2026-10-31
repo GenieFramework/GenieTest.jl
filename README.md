@@ -4,13 +4,13 @@ A Julia package for testing Stipple/Genie applications with integrated frontend 
 
 ## Overview
 
-GenieTest provides utilities for creating and testing Stipple-based web applications with backend (Genie/Stipple reactive models) and frontend (browser, Electron, or headless WebChannel client) support. It simplifies the process of launching test applications and verifying their behavior.
+GenieTest provides utilities for creating and testing Stipple-based web applications with backend (Genie/Stipple reactive models) and frontend (browser, Electron, Playwright, or headless WebChannel client) support. It simplifies the process of launching test applications and verifying their behavior.
 
 A`GenieTest.App`behaves very much like a `ReactiveModel` with some subtle differences.
 
-- An `App` has a `__model__` backend and a `__frontend__` frontend. The frontend can be `nothing`, an Electron window (`ElectronFrontend`) or a headless `Client` (a Playwright browser is prepared, see below); all are subtypes of `GenieTest.AbstractFrontend`. `__window__` remains as a compatibility alias when the frontend is an Electron `Window`.
+- An `App` has a `__model__` backend and a `__frontend__` frontend. The frontend can be `nothing`, an Electron window (`ElectronFrontend`), a Playwright page (`PlaywrightFrontend`) or a headless `Client`; all are subtypes of `GenieTest.AbstractFrontend`. `__window__` remains as a compatibility alias when the frontend is an Electron `Window`.
 - Values are retrieved from the `__model__`, if available, or from the `__frontend__` as a fallback.
-- There are currently two possible frontends: an Electron window and a headless native julia client. The latter exposes model fields declared by the page and sends updates through the Genie WebChannel.
+- The possible frontends are an Electron window, a Playwright page and a headless native julia client. The latter exposes model fields declared by the page and sends updates through the Genie WebChannel.
 - The model fields are available via dot syntax for backend and frontend including auto-completion.
 - CAVEAT: The dot syntax always returns values and not Reactive variables. The reason is that the syntax should be identical independent whether we work with fronend or backend. Assignments are nevertheless reactive, e.g. `x = app.myfield` or `app.myfield = "newvalue"` will trigger reactive updates.
 - Silent updates are only possible if a model is available and can be written as `app[:myfield] = "silent update`. But in most cases you will better define `model = app.__model__` and continue with standard syntax for `model`
@@ -19,7 +19,7 @@ A`GenieTest.App`behaves very much like a `ReactiveModel` with some subtle differ
 ## Features
 
 - **Flexible App Creation**: Launch Stipple apps with configurable frontend and backend options
-- **Multiple Frontend Options**: Support for browser, Electron, or headless (no frontend) modes
+- **Multiple Frontend Options**: Support for browser, Electron, Playwright, or headless (no frontend) modes
 - **Backend Integration**: Automatic connection to Stipple reactive models with timeout handling
 - **Property Access**: Convenient dot notation access to reactive model properties
 - **Testing Utilities**: Helper functions for waiting and notifications in tests
@@ -93,7 +93,7 @@ App(context::Module; kwargs)
 - `timeout`: Seconds to wait for backend readiness (default: 10)
 - `port`: Server port (default: uses `Genie.config.server_port`)
 - `id`: Debug ID for identifying the Stipple model
-- `frontend`: Frontend type - `:browser`, `:electron`, `:client`, or `:none`
+- `frontend`: Frontend type - `:browser`, `:electron`, `:playwright`, `:client`, or `:none`
 - `backend`: Whether to start the backend model (default: `!startswith(url, r"https://"i)`)
 - `isready`: Function to check app readiness (default: `app -> app.isready === true`)
 - `priority`: `:backend` (default) or `:frontend`. If an app has both a backend model and a frontend
@@ -114,6 +114,9 @@ app = App("/", frontend = :electron)
 # No frontend (headless mode)
 app = App("/", frontend = :none, backend = true)
 
+# Playwright browser (needs `using Playwright`)
+app = App("/", frontend = :playwright)
+
 # Headless WebChannel client (no browser window)
 app = App("/", frontend = :client, backend = false)
 
@@ -125,20 +128,15 @@ When no backend model is available, `app.field` reads and `app.field = value` wr
 are forwarded to the headless client. The client supports reading and writing model
 fields with dot syntax or `getfield_` / `setfield_!`; its model fields are also
 available directly as `app.__frontend__.field`. JavaScript and DOM operations require
-a frontend with JavaScript support (Electron).
+a frontend with JavaScript support (Electron or Playwright).
 
-### Playwright (preview)
+### Playwright
 
-A `:playwright` frontend that drives a real browser with [Playwright.jl](https://github.com/frankier/playwright-julia)
-is prepared in `ext_unregistered/`. It is not a package extension yet, because Playwright.jl is not in the General
-registry and a registered package cannot depend on an unregistered one. Meanwhile you can enable it by hand:
+The `:playwright` frontend drives a real browser with [Playwright.jl](https://github.com/frankier/playwright-julia).
+It is a package extension, so `using Playwright` is all that is needed (Playwright.jl is a weak dependency):
 
 ```julia
-using Pkg
-Pkg.add(url = "https://github.com/frankier/playwright-julia")   # once, unregistered
-
 using GenieTest, Playwright
-include(joinpath(pkgdir(GenieTest), "ext_unregistered", "GenieTestPlaywrightExt.jl"))
 
 app = App("https://remote-server.com", backend = false, frontend = :playwright)
 
@@ -146,18 +144,51 @@ app = App("https://remote-server.com", backend = false, frontend = :playwright)
 app = App("/", frontend = :playwright, frontend_options = Dict(:headless => true, :profile => nothing))
 ```
 
-The `include` only adds methods to GenieTest. Do it once per Julia session, after `using Playwright`, and before the
-first `App(...; frontend = :playwright)`. `pkgdir(GenieTest)` works for an installed as well as for a developed GenieTest.
+By default it opens a visible window on a persistent profile in `joinpath(homedir(), ".julia", "playwright-profile")`.
+The profile keeps logins between runs (SSO, passkeys and platform authenticators only work with a real Chrome or
+Edge, not with the bundled Chromium), but it can only be used by one browser process. Therefore several apps with
+the same profile share one browser and each one gets its own tab; the browser is closed together with the last app.
 
-By default it starts the installed Google Chrome (`engine = "chrome"`) with a visible window on a persistent
-profile in `joinpath(homedir(), ".julia", "playwright-profile")`. The profile keeps logins between runs (SSO,
-passkeys and platform authenticators only work with the real Chrome, not with the bundled Chromium),
-but it can only be used by one browser process. Therefore several apps with the same profile share one browser and
-each one gets its own tab; the browser is closed together with the last app.
+The browser is chosen via `engine`, by default `["chrome", "msedge", "chromium"]`: the installed Google Chrome, the
+installed Microsoft Edge, and finally the Chromium that Playwright downloads itself. The first one that can be
+launched is used. Pass a single name or your own list to override this. To get the bundled Chromium (e.g. on CI):
+
+```julia
+using Playwright
+Playwright.install(browsers = ["chromium"])   # add `with_deps = true` on Linux (needs root)
+```
 
 `frontend_options` accepts `:profile`, `:headless`, `:engine`, `:chromium_sandbox` and any other keyword of
-`Playwright.launch_persistent_context`. Once Playwright.jl is registered, the `include` will no longer be needed:
-`using Playwright` will be enough.
+`Playwright.launch_persistent_context`. Under root or in containers Chromium usually needs
+`:chromium_sandbox => false`.
+
+### Nested fields
+
+Elements of arrays and dictionaries can be read and written in place with the `@get` and `@set` macros
+(from Stipple.ReactiveTools). They follow the same rule as `app.field`: the backend model is used, unless the app has
+no model or `app.__priority__ == :frontend`; then the access goes to the frontend (Electron or Playwright).
+
+```julia
+@set app.list[1] = 4           # backend: updates the element and notifies the model
+@get app.list[1]               # read
+app.__priority__ = :frontend
+@set app.list[1] = 7           # frontend: updates the element in the page, which pushes it to the backend
+```
+
+The frontend access is also available as a string index relative to `GENIEMODEL`, which needs JavaScript support.
+The string is plain JavaScript, so array indices are **0-based** there. `@get`/`@set` translate Julia's 1-based
+indices into `.juliaGet(i)`/`.juliaSet(i, value)` calls, which you can also write yourself:
+
+```julia
+app["list[0]"]                 # first element, JavaScript indexing
+app["list.juliaGet(1)"]        # first element, Julia indexing (what `@get app.list[1]` does)
+app["list.juliaGet(1)"] = 7    # write, pushed to the backend
+app["obj.sub.value"] = "new"   # dictionaries and nested paths
+```
+
+Without `@set`, `app.list[1] = 2` only changes the local value; call `notify(app, :list)` to trigger the
+reactive handlers. `@get`/`@set` for apps with a frontend other than an Electron window need a Stipple version
+that provides `Stipple.ReactiveTools.use_frontend`.
 
 ### Connecting
 
@@ -181,7 +212,7 @@ end
 
 trigger_event(app, :ping)                         # path chosen by the app's priority
 trigger_event(app, :ping, Dict("a" => 1); via = :backend)   # call the handler directly on the model
-trigger_event(app, :ping; via = :frontend)        # send it from the frontend (Electron window or Client)
+trigger_event(app, :ping; via = :frontend)        # send it from the frontend (Electron window, Playwright page or Client)
 wait_for(() -> app.pinged == 1, app)              # frontend events are handled asynchronously
 ```
 
@@ -229,8 +260,8 @@ notify_test(model, result, "Value Check")
 
 - For local testing, the standard browser is probably the best choice. For remote testing Electron must be used, as the standard browser cannot be addressed via JavaScript from the test suite.
 - If you need to evaluate Javascript expressions in the frontend and send them to the backend, Electron is currently more convenient.
-- On MacOS Passkeys are, unfortunately, not supported via Electron. A Playwright frontend with the installed Chrome is prepared, see above.
-- Electron is optional: `frontend = :electron` needs `using Electron`.
+- On MacOS Passkeys are, unfortunately, not supported via Electron. Use the Playwright frontend with the installed Chrome or Edge instead, see above.
+- Electron and Playwright are optional: `frontend = :electron` needs `using Electron`, `frontend = :playwright` needs `using Playwright`.
 
 ## License
 

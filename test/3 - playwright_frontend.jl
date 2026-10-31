@@ -61,3 +61,31 @@ end
     end
     @test isempty(ext.SESSIONS)
 end
+
+@testitem "@get and @set follow the priority in Playwright" setup = [Setup] tags=[:ci, :frontend, :playwright] begin
+    using Playwright
+    port = rand(8081:8999)
+    down()
+    up(port = port, ws_port = port)
+
+    app = App("/"; frontend = :playwright, port, frontend_options = Dict(:headless => true, :chromium_sandbox => false, :profile => mktempdir()))
+    try
+        # backend priority: the model is changed and the frontend follows
+        @set app.list[1] = 5
+        @test app.__model__.list[][1] == 5
+        @test @get(app.list[1]) == 5
+        @test wait_for(() -> (@get app.list[1] force_js = true) == 5, app; timeout = 10)
+
+        # frontend priority: the frontend is changed and pushes to the backend
+        app.__priority__ = :frontend
+        @set app.list[1] = 7
+        @test wait_for(() -> app.__model__.list[][1] == 7, app; timeout = 10)
+        @test @get(app.list[1]) == 7
+        @test app["list[0]"] == 7
+        @test app["list.juliaGet(1)"] == 7
+    finally
+        close(app)
+        down()
+    end
+end
+
